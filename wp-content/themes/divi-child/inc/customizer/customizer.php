@@ -33,12 +33,12 @@
 /**
  * Arrays of options
  */	
-require( dirname(__FILE__) . '/options.php' );
+require(dirname(__FILE__) . '/options.php');
 
 /**
  * Helper functions
  */	
-require( dirname(__FILE__) . '/helpers.php' );
+require(dirname(__FILE__) . '/helpers.php');
 
 /**
  * Adds Customizer Sections, Settings and Controls
@@ -61,7 +61,7 @@ function wpdc_customizercbp_customize_register( $wp_customize ) {
 	/**
 	 * Custom controls
 	 */	
-	require( dirname(__FILE__) . '/custom-controls.php' );
+	require(dirname(__FILE__) . '/custom-controls.php');
 
 
 	/*

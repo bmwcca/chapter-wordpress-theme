@@ -1,18 +1,8 @@
 <?php
-
-
 /*
 	Divi Child Functions
 */
 
-
-function my_et_builder_post_types( $post_types ) {
-    $post_types[] = 'tribe_events';
-    $post_types[] = 'advert';
-     
-    return $post_types;
-}
-add_filter( 'et_builder_post_types', 'my_et_builder_post_types' );
 
 if ( ! defined( 'ABSPATH' ) ) exit; // Exit if accessed directly
 	
@@ -21,13 +11,13 @@ define( 'WPDC_VER', '1.0' );
 define( 'WPDC_THEME_NAME', 'Divi Child Theme' );
 	
 // includes
-include( 'inc/admin/settings.php' );
-include( 'inc/customizer/customizer.php' );
+include('inc/admin/settings.php');
+include('inc/customizer/customizer.php');
 
 // include builder integration
 if ( is_admin() && ( ! defined( 'DOING_AJAX' ) || ! DOING_AJAX ) ) {
 	
-	include( 'inc/builder/class-divi-builder-integration-admin.php' );
+	include('inc/builder/class-divi-builder-integration-admin.php');
 	add_action( 'after_setup_theme', array( 'Divi_Builder_Integration_Admin', 'get_instance' ) );
 
 }

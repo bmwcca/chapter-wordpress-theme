@@ -53,7 +53,7 @@
 		echo '<form method="post" action="options.php">';
 		settings_fields('wpdc_plugin_options_group');
 		settings_errors();
-		require_once ('views.php');		// load table settings
+		require_once('views.php');		// load table settings
 		echo '<div style="clear:both;"></div>';
 		echo '</div>';
 		echo '<div style="clear:both;"></div>';
