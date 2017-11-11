@@ -22,6 +22,14 @@ if ( is_admin() && ( ! defined( 'DOING_AJAX' ) || ! DOING_AJAX ) ) {
 
 }
 
+function my_et_builder_post_types( $post_types ) {
+    $post_types[] = 'tribe_events';
+    $post_types[] = 'advert';
+
+    return $post_types;
+}
+add_filter( 'et_builder_post_types', 'my_et_builder_post_types' );
+
 add_action( 'wp_head', 'wpdc_remove_space_before_footer');
 
 function wpdc_remove_space_before_footer() { 
