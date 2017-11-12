@@ -546,7 +546,7 @@ if ( !class_exists( 'PT_CV_Functions' ) ) {
 				'post_type'			 => PT_CV_POST_TYPE,
 				'post_status'		 => 'publish',
 				'meta_key'			 => PT_CV_META_ID,
-				'meta_value'		 => esc_sql( $meta_id ),
+				'meta_value'		 => cv_esc_sql( $meta_id ),
 				'cv_get_view'		 => true,
 				)
 			);
@@ -636,7 +636,7 @@ if ( !class_exists( 'PT_CV_Functions' ) ) {
 			$pt_cv_id				 = $view_id;
 			$pt_cv_glb[ $pt_cv_id ]	 = array();
 
-			$view_settings								 = array_map( 'esc_sql', $settings );
+			$view_settings								 = array_map( 'cv_esc_sql', $settings );
 			$pt_cv_glb[ $pt_cv_id ][ 'view_settings' ]	 = $view_settings;
 
 			$content_type	 = PT_CV_Functions::setting_value( PT_CV_PREFIX . 'content-type', $view_settings );
@@ -1084,8 +1084,8 @@ if ( !class_exists( 'PT_CV_Functions' ) ) {
 			PT_CV_Functions::_nonce_check( 'form_nonce', 'view_submit' );
 
 			// Insert View
-			$title	 = esc_sql( $_POST[ PT_CV_PREFIX . 'view-title' ] );
-			$cur_pid = esc_sql( $_POST[ PT_CV_PREFIX . 'post-id' ] );
+			$title	 = cv_esc_sql( $_POST[ PT_CV_PREFIX . 'view-title' ] );
+			$cur_pid = cv_esc_sql( $_POST[ PT_CV_PREFIX . 'post-id' ] );
 			if ( !$cur_pid ) {
 				$post_id = PT_CV_Functions::post_insert( array( 'ID' => 0, 'title' => $title ) );
 			} else {
@@ -1119,12 +1119,15 @@ if ( !class_exists( 'PT_CV_Functions' ) ) {
 		 */
 		static function view_output( $atts ) {
 			$atts	 = shortcode_atts( apply_filters( PT_CV_PREFIX_ . 'shortcode_params', array( 'id' => 0 ) ), $atts );
-			$id		 = esc_sql( $atts[ 'id' ] );
+			$id		 = cv_sanitize_vid( $atts[ 'id' ] );
 			if ( $id && !self::duplicated_process( $id, $atts ) ) {
-				$settings	 = PT_CV_Functions::view_get_settings( $id );
-				$view_html	 = PT_CV_Functions::view_process_settings( $id, $settings, null, $atts );
-				$result		 = PT_CV_Functions::view_final_output( $view_html );
-				do_action( PT_CV_PREFIX_ . 'flushed_output', $result );
+				$result = apply_filters( PT_CV_PREFIX_ . 'view_shortcode_output', null, $atts );
+				if ( empty( $result ) ) {
+					$settings	 = PT_CV_Functions::view_get_settings( $id );
+					$view_html	 = PT_CV_Functions::view_process_settings( $id, $settings, null, $atts );
+					$result		 = PT_CV_Functions::view_final_output( $view_html );
+					do_action( PT_CV_PREFIX_ . 'flushed_output', $result );
+				}
 
 				return $result;
 			}
@@ -1210,7 +1213,7 @@ if ( !class_exists( 'PT_CV_Functions' ) ) {
 			}
 
 			// Switch language
-			$language = empty( $_POST[ 'lang' ] ) ? '' : esc_sql( $_POST[ 'lang' ] );
+			$language = empty( $_POST[ 'lang' ] ) ? '' : cv_esc_sql( $_POST[ 'lang' ] );
 			self::switch_language( $language );
 
 			// Show output

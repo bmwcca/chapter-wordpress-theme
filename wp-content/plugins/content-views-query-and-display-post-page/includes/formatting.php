@@ -48,3 +48,20 @@ function cv_sanitize_tag_content( $string, $remove_breaks = false ) {
 
 	return trim( $string );
 }
+
+/**
+ * For WordPress 4.8.3 and after
+ */
+if ( !function_exists( 'cv_esc_sql' ) ) {
+	function cv_esc_sql( $data ) {
+		$result = esc_sql( $data );
+
+		global $wpdb;
+		if ( method_exists( $wpdb, 'remove_placeholder_escape' ) ) {
+			return $wpdb->remove_placeholder_escape( $result );
+		} else {
+			return $result;
+		}
+	}
+
+}

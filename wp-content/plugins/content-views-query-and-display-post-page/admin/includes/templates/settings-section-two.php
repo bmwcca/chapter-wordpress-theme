@@ -11,6 +11,7 @@
 	.cvgopro {
 		color: #fe1243;
 		font-size: 2em;
+		margin-bottom: 20px;
 	}
 
 	h3 {
@@ -48,7 +49,7 @@ $cp = '?utm_source=client&utm_medium=settings_page&utm_campaign=gopro';
 
 <div class="row" id="pt-cv-features">
 	<div class="col-md-12">
-		<h3>Filter Any Content</h3>
+		<h3>Filter Any Post Type, Custom Field, Taxonomy</h3>
 		<div>
 			<ul>
 				<li>support custom post type: WooCommerce, Easy Digital Downloads, Events... (<a href="http://sample.contentviewspro.com/supports/woocommerce-3/<?php echo $cp; ?>" target="_blank">view sample</a>)</li>
@@ -64,11 +65,11 @@ $cp = '?utm_source=client&utm_medium=settings_page&utm_campaign=gopro';
 		</div>
 	</div>
 	<div class="col-md-12">
-		<h3>Replace Layout</h3>
+		<h3>Grid Layout For Blog, Category, Search... Page</h3>
 		<div>Use beautiful grid for Blog, Category, Tag, Search results... page in seconds, without coding (<a href="http://docs.contentviewspro.com/completely-replace-wordpress-layout-by-content-views-pro-layout/<?php echo $cp; ?>" target="_blank">view demo</a>)</div>
 	</div>
 	<div class="col-md-12">
-		<h3>Make Money Online</h3>
+		<h3>Make Money Online $</h3>
 		<div>Make money from your website, by displaying your Google Adsense, affiliate banners... between posts in grid, list easily (<a href="https://www.contentviewspro.com/<?php echo $cp; ?>#show-ads" target="_blank">read more</a>)</div>
 	</div>
 </div>

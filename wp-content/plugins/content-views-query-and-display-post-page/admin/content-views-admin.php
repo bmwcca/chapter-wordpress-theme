@@ -275,6 +275,9 @@ class PT_Content_Views_Admin {
 			// Remove style of theme Tesseract
 			wp_dequeue_style( 'tesseract-custom' );
 
+			// Remove style of theme Phlox
+			wp_dequeue_style( 'auxin-admin-style' );
+
 			do_action( PT_CV_PREFIX_ . 'remove_unwanted_assets' );
 		}
 	}

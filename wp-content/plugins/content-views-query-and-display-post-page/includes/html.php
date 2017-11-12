@@ -327,7 +327,7 @@ if ( !class_exists( 'PT_CV_Html' ) ) {
 				$output = $html;
 			}
 
-			return $before_output . $output;
+			return apply_filters( PT_CV_PREFIX_ . 'view_all_output', $before_output . $output, $before_output, $output );
 		}
 
 		/**

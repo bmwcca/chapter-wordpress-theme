@@ -420,6 +420,7 @@ if ( !class_exists( 'PT_CV_Settings' ) ) {
 															'type'	 => 'text',
 															'name'	 => $prefix . 'excerpt-readmore-text',
 															'std'	 => ucwords( rtrim( __( 'Read more...' ), '.' ) ),
+															'desc'	 => '<span class="alert-warning">' . sprintf( __( 'To change color of this button, <a href="%s" target="_blank"> please check this document </a>', 'content-views-query-and-display-post-page' ), 'http://docs.contentviewspro.com/change-color-read-more-button/?utm_source=client&utm_medium=read-more-color&utm_campaign=gopro' ) . '</span>',
 														),
 													),
 													) : '',
@@ -652,7 +653,7 @@ if ( !class_exists( 'PT_CV_Settings' ) ) {
 					),
 				),
 				// Upgrade to Pro: Show image/video in content as thumbnail
-				!get_option( 'pt_cv_version_pro' ) ? PT_CV_Settings::get_cvpro( sprintf( __( 'In this lite version, thumbnail is only shown if the post has %s', 'content-views-query-and-display-post-page' ), sprintf( '<a target="_blank" href="https://codex.wordpress.org/Post_Thumbnails">%s</a>', __( 'Featured Image' ) ) ), 12, null, true ) : '',
+				!get_option( 'pt_cv_version_pro' ) ? PT_CV_Settings::get_cvpro( sprintf( __( 'In this lite version, thumbnail is only shown if the post has %s.<br>In the Pro version, you can show the first image in post as thumbnail, without having to set a featured image', 'content-views-query-and-display-post-page' ), sprintf( '<a target="_blank" href="https://codex.wordpress.org/Post_Thumbnails">%s</a>', __( 'Featured Image' ) ) ), 12, null, true ) : '',
 			);
 
 			$result = apply_filters( PT_CV_PREFIX_ . 'field_thumbnail_settings', $result, $prefix );
