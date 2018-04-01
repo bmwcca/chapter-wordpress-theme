@@ -5,8 +5,7 @@
  * Description: The lightweight WordPress classifieds plugin done right.
  * Author: Greg Winiarski
  * Text Domain: adverts
- * Requires PHP: 5.3
- * Version: 1.1.6
+ * Version: 1.2.2
  * 
  * Adverts is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -40,7 +39,9 @@ global $adverts_config, $adverts_namespace;
 $adverts_config = null;
 
 // define global $adverts_namespace variable
-$adverts_namespace = array( 'config' => array(
+$adverts_namespace = array();
+
+$adverts_namespace['config'] = array(
     'option_name' => 'adverts_config',
     'default' => array(
         'module' => array(),
@@ -57,9 +58,27 @@ $adverts_namespace = array( 'config' => array(
         'ads_list_default__columns' => 2,
         'ads_list_default__display' => 'grid',
         'ads_list_default__switch_views' => 0,
-        'ads_list_default__posts_per_page' => 20,
+        'ads_list_default__posts_per_page' => 20
     )
-) );
+);
+
+$adverts_namespace['gallery'] = array(
+    'option_name' => 'adverts_gallery',
+    'default' => array(
+        'ui' => 'pagination', // either paginator or thumbnails
+        'visible_items' => 5,
+        'scrolling_items' => 1,
+        'lightbox' => 1,
+        'image_edit_cap' => 'read',
+        'image_sizes' => array(
+            // supported sizes: adverts-upload-thumbnail, adverts-list, adverts-gallery
+            "adverts-gallery" => array( 'enabled' => 1, 'width' => 650, 'height' => 300, 'crop' => true ),
+            "adverts-list" => array( 'enabled' => 1, 'width' => 310, 'height' => 190, 'crop' => true ),
+            "adverts-upload-thumbnail" => array( 'enabled' => 1, 'width' => 150, 'height' => 105, 'crop' => true ),
+            //"adverts-gallery-thumbnail"
+        ),
+    )
+);
 
 /**
  * Main Adverts Init Function
@@ -80,6 +99,7 @@ function adverts_init() {
     add_filter( 'adverts_the_content', 'convert_chars' );
     add_filter( 'adverts_the_content', 'wpautop' );
     
+    wp_register_style( 'adverts-upload', ADVERTS_URL . '/assets/css/adverts-upload.css', array(), "1" );
     wp_register_style( 'adverts-icons', ADVERTS_URL . '/assets/css/adverts-glyphs.css', array(), "1" );
     wp_register_style( 'adverts-icons-animate', ADVERTS_URL . '/assets/css/animation.css', array(), "1" );
     
@@ -136,9 +156,6 @@ function adverts_init() {
     );
     
     register_taxonomy( 'advert_category', 'advert', apply_filters('adverts_register_taxonomy', $args, 'advert_category') );
-
-    add_image_size( "adverts-upload-thumbnail", 150, 105, true );
-    add_image_size( "adverts-list", 310, 190, true);
     
     include_once ADVERTS_PATH . 'includes/class-adverts.php';
     include_once ADVERTS_PATH . 'includes/class-flash.php';
@@ -147,6 +164,12 @@ function adverts_init() {
     include_once ADVERTS_PATH . 'includes/functions.php';
     
     include_once ADVERTS_PATH . 'includes/defaults.php';
+    
+    foreach( adverts_config( "gallery.image_sizes" ) as $image_key => $image_size ) {
+        if( $image_size["enabled"] ) {
+            add_image_size( $image_key, $image_size["width"], $image_size["height"], $image_size["crop"] );
+        }
+    }
     
     $currency = Adverts::instance()->get("currency");
     
@@ -177,8 +200,16 @@ function adverts_init() {
     wp_register_script( 
         'adverts-gallery', 
         ADVERTS_URL . '/assets/js/adverts-gallery.js', 
-        array( 'jquery', 'plupload-all', 'jquery-ui-sortable', 'jquery-effects-core', 'jquery-effects-fade'  ), 
-        "2", 
+        array( 'jquery', 'plupload-all', 'jquery-ui-sortable', 'jquery-effects-core', 'jquery-effects-fade', 'wp-util', 'jcrop'  ), 
+        "6", 
+        true
+    );
+    
+    wp_register_script(
+        'adverts-als',
+        ADVERTS_URL . '/assets/js/jquery.als-1.7.min.js',
+        array( 'jquery' ),
+        "1.7",
         true
     );
 
@@ -241,12 +272,14 @@ function adverts_init() {
  */
 function adverts_init_frontend() {
     
-    wp_register_style( 'adverts-frontend', ADVERTS_URL . '/assets/css/adverts-frontend.css', array(), "7" );
+    wp_register_style( 'adverts-frontend', ADVERTS_URL . '/assets/css/adverts-frontend.css', array(), "10" );
+    wp_register_style( 'adverts-swipebox', ADVERTS_URL . '/assets/css/swipebox.min.css', array(), "1.4.5" );
     
-    wp_register_script('adverts-frontend', ADVERTS_URL . '/assets/js/adverts-frontend.js', array( 'jquery' ), "3" );
+    wp_register_script('adverts-single', ADVERTS_URL . '/assets/js/adverts-single.js', array( 'jquery' ), "2" );
+    wp_register_script('adverts-frontend', ADVERTS_URL . '/assets/js/adverts-frontend.js', array( 'jquery' ), "4" );
     wp_register_script('adverts-frontend-add', ADVERTS_URL . '/assets/js/adverts-frontend-add.js', array( 'jquery'), "2" );
     wp_register_script('adverts-frontend-manage', ADVERTS_URL . '/assets/js/adverts-frontend-manage.js', array( 'jquery'), "1" );
-    wp_register_script('responsive-slides', ADVERTS_URL . '/assets/js/responsive-slides.js', array('jquery'), "1" );
+    wp_register_script('adverts-swipebox', ADVERTS_URL . '/assets/js/jquery.swipebox.js', array( 'jquery', 'adverts-frontend' ), "1.4.5");
     
     include_once ADVERTS_PATH . 'includes/functions.php';
     include_once ADVERTS_PATH . 'includes/gallery.php';
@@ -266,7 +299,10 @@ function adverts_init_frontend() {
     add_filter('adverts_create_user_from_post_id', '_adverts_create_user_from_post_id', 20, 2 );
     
     wp_localize_script( 'adverts-frontend', 'adverts_frontend_lang', array(
-        "ajaxurl" => admin_url('admin-ajax.php')
+        "ajaxurl" => admin_url('admin-ajax.php'),
+        "als_visible_items" => adverts_config( "gallery.visible_items" ),
+        "als_scrolling_items" => adverts_config( "gallery.scrolling_items" ),
+        "lightbox" => adverts_config( "gallery.lightbox" )
     ) );
     
     wp_localize_script( 'adverts-frontend-manage', 'adverts_frontend_manage_lang', array(
@@ -300,11 +336,11 @@ function adverts_init_admin() {
     add_action( 'add_meta_boxes', 'adverts_data_box' );
     add_action( 'add_meta_boxes', 'adverts_box_gallery' );
     
-    wp_register_script('adverts-admin', ADVERTS_URL . '/assets/js/adverts-admin.js', array( 'jquery' ), "2", true);
-    wp_register_style('adverts-admin', ADVERTS_URL . '/assets/css/adverts-admin.css', array(), "3" );
+    wp_register_script('adverts-admin', ADVERTS_URL . '/assets/js/adverts-admin.js', array( 'jquery' ), "3", true);
+    wp_register_style('adverts-admin', ADVERTS_URL . '/assets/css/adverts-admin.css', array(), "4" );
     
     wp_register_script( 'adverts-admin-updates', ADVERTS_URL . '/assets/js/adverts-admin-updates.js', array( 'jquery' ), false, true );
-    wp_register_style( 'adverts-admin-updates', ADVERTS_URL . '/assets/css/adverts-admin-updates.css');
+    wp_register_style( 'adverts-admin-updates', ADVERTS_URL . '/assets/css/adverts-admin-updates.css', array(), "2" );
     
     add_filter( 'display_post_states', 'adverts_display_expired_state' );
     add_action( 'post_submitbox_misc_actions', 'adverts_expiry_meta_box' );
@@ -332,6 +368,10 @@ function adverts_init_admin() {
     add_action('wp_ajax_adverts_gallery_update', 'adverts_gallery_update');
     add_action('wp_ajax_adverts_gallery_update_order', 'adverts_gallery_update_order');
     add_action('wp_ajax_adverts_gallery_delete', 'adverts_gallery_delete');
+    add_action('wp_ajax_adverts_gallery_image_stream', 'adverts_gallery_image_stream');
+    add_action('wp_ajax_adverts_gallery_image_restore', 'adverts_gallery_image_restore');
+    add_action('wp_ajax_adverts_gallery_image_save', 'adverts_gallery_image_save');
+    add_action('wp_ajax_adverts_gallery_video_cover', 'adverts_gallery_video_cover');
     add_action('wp_ajax_adverts_show_contact', 'adverts_show_contact');
     add_action('wp_ajax_adverts_delete_tmp', 'adverts_delete_tmp');
     add_action('wp_ajax_adverts_delete', 'adverts_delete');
@@ -340,6 +380,10 @@ function adverts_init_admin() {
     add_action('wp_ajax_nopriv_adverts_gallery_update', 'adverts_gallery_update');
     add_action('wp_ajax_nopriv_adverts_gallery_update_order', 'adverts_gallery_update_order');
     add_action('wp_ajax_nopriv_adverts_gallery_delete', 'adverts_gallery_delete');
+    add_action('wp_ajax_nopriv_adverts_gallery_image_stream', 'adverts_gallery_image_stream');
+    add_action('wp_ajax_nopriv_adverts_gallery_image_restore', 'adverts_gallery_image_restore');
+    add_action('wp_ajax_nopriv_adverts_gallery_image_save', 'adverts_gallery_image_save');
+    add_action('wp_ajax_nopriv_adverts_gallery_video_cover', 'adverts_gallery_video_cover');
     
     add_action('wp_ajax_nopriv_adverts_show_contact', 'adverts_show_contact');
     add_action('wp_ajax_nopriv_adverts_delete_tmp', 'adverts_delete_tmp');

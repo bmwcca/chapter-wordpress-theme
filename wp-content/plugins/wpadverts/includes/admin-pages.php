@@ -75,7 +75,7 @@ function adverts_admin_page_extensions() {
     
     // Load modules config
     $module = adverts_config( 'module' );
-    $module_groups = array(
+    $module_groups = apply_filters( "wpadverts_module_groups", array(
         array(
             "title" => __( "Modules", "adverts" ),
             "modules" => array(
@@ -164,6 +164,13 @@ function adverts_admin_page_extensions() {
                     "plugin" => "wpadverts-category-icons/wpadverts-category-icons.php",
                     "purchase_url" => "https://wpadverts.com/extensions/wpadverts-category-icons/"
                 ),
+                "wpadverts-mark-as-sold" => array(
+                    "title" => __( "Mark As Sold", "adverts" ),
+                    "text" => __( "Allow users and administrators to mark the Ads as sold.", "adverts" ),
+                    "type" => "",
+                    "plugin" => "wpadverts-mark-as-sold/wpadverts-mark-as-sold.php",
+                    "purchase_url" => "https://wpadverts.com/extensions/wpadverts-mark-as-sold/"
+                ),
             )
         ),
         array(
@@ -185,7 +192,7 @@ function adverts_admin_page_extensions() {
             )
         )
 
-    );
+    ) );
 
     if(adverts_request('enable')) {
         // User is trying to enable module

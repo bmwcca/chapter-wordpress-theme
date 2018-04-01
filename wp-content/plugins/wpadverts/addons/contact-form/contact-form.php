@@ -110,6 +110,20 @@ function adext_contact_form( $post_id ) {
             );
             $show_form = true; 
         }
+    } else {
+        
+        if( get_current_user_id() > 0 ) {
+            $user = wp_get_current_user();
+            /* @var $user WP_User */
+            
+            $bind = array(
+                "message_name" => $user->display_name,
+                "message_email" => $user->user_email
+            );
+            
+            $form->bind( $bind );
+            
+        }
     }
     
     ?>
@@ -121,7 +135,7 @@ function adext_contact_form( $post_id ) {
     <div class="adverts-single-actions">
         <?php if( ! empty( $email ) ): ?>
         <a href="#" class="adverts-button adverts-show-contact-form">
-            <?php echo esc_html("Send Message", "adverts") ?>
+            <?php esc_html_e("Send Message", "adverts") ?>
             <span class="adverts-icon-down-open"></span>
         </a>
         <?php endif; ?>

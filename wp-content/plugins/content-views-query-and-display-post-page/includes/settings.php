@@ -546,7 +546,6 @@ if ( !class_exists( 'PT_CV_Settings' ) ) {
 							'std'		 => 'yes',
 						),
 					),
-					'dependence'	 => array( 'layout-format', '1-col' ),
 				),
 				// Show Title
 				array(
@@ -723,7 +722,6 @@ if ( !class_exists( 'PT_CV_Settings' ) ) {
 							'std'		 => 'yes',
 						),
 					),
-					'dependence'	 => array( 'content-type', 'page', '!=' ),
 				),
 				// Comment
 				array(

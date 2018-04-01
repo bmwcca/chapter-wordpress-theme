@@ -238,20 +238,12 @@ function cv_comp_plugin_lazyload_break_loading() {
 }
 
 /**
- * Do shortcode in the_content might cause theme or plugin issue
+ * Post content begins with a slider shortcode
+ * Issue: slider number shows at beginning of generated excerpt
  */
-add_filter( 'pt_cv_skip_do_shortcode', 'cv_comp_skip_do_shortcode_content' );
-function cv_comp_skip_do_shortcode_content( $args ) {
-	// OptimizePress theme: the frontend editor doesn't work
-	$theme = wp_get_theme();
-	if ( $theme->get( 'Name' ) === 'OptimizePress' ) {
-		$args = true;
-	}
-
-	// Slider Revolution plugin (tested until v5.4.5.1) doesn't work
-	if ( cv_is_active_plugin( 'revslider' ) ) {
-		$args = true;
-	}
-
+add_filter( 'pt_cv_before_generate_excerpt', 'cv_comp_common_slider_number_in_excerpt' );
+function cv_comp_common_slider_number_in_excerpt( $args ) {
+	$args	 = preg_replace( '/<a[^>]*>(\d+)<\/a>/', '', $args );
+	$args	 = preg_replace( '/<li[^>]*>(\d+)<\/li>/', '', $args );
 	return $args;
 }

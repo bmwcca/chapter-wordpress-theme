@@ -136,11 +136,16 @@ class Adverts_Form
                 
                 $v = array_merge($this->get_validator( $v["name"] ), $v);
                 
-                if(empty($this->_form[$name]["value"]) && $v["validate_empty"] === false ) {
+                if(isset($this->_form[$name]["value"])) {
+                    $value = $this->_form[$name]["value"];
+                } else {
+                    $value = null;
+                }
+                
+                if(empty($value) && $v["validate_empty"] === false ) {
                     continue;
                 } 
                 
-                $value = $this->_form[$name]["value"];
                 $result = call_user_func( $v["callback"], $value, $v["params"] );
                 
                 if( $result === true || $result === 1) {
@@ -373,5 +378,28 @@ class Adverts_Form
             }
         }
         return $result;
+    }
+    
+    /**
+     * Returns Layout Type
+     * 
+     * The forms can use either "stacked" or aligned" layout. This method will
+     * return CSS class identifying the layout.
+     * 
+     * To modify the used class you can use adverts_form_layout filter
+     * 
+     * @uses adverts_form_layout filter
+     * 
+     * @since 1.2.1
+     * @return string       CSS Class name
+     */
+    public function get_layout() {
+        try {
+            $layout = $this->get_scheme( "layout" );
+        } catch (Exception $ex) {
+            $layout = "aligned";
+        }
+        
+        return apply_filters( "adverts_form_layout", "adverts-form-" . $layout, $layout );
     }
 }

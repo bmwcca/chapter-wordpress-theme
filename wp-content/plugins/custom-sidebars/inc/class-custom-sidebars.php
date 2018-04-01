@@ -72,9 +72,27 @@ class CustomSidebars {
 	 * We directly initialize sidebar options when class is created.
 	 */
 	private function __construct() {
+		add_action( 'init', array( $this, 'integrations' ) );
 		add_action( 'admin_init', array( $this, 'admin_init' ) );
 		// Extensions use this hook to initialize themselfs.
 		do_action( 'cs_init' );
+		/**
+		 * Add version to media files
+		 */
+		add_filter( 'wpmu_style_version', array( $this, 'wp_enqueue_add_version' ), 10, 2 );
+		add_filter( 'wpmu_script_version', array( $this, 'wp_enqueue_add_version' ), 10, 2 );
+	}
+
+	/**
+	 * Add version to media files
+	 *
+	 * @since 3.1.3
+	 */
+	public function wp_enqueue_add_version( $version, $handle ) {
+		if ( preg_match( '/^wpmu\-cs\-/', $handle ) ) {
+			return '3.1.3';
+		}
+		return $version;
 	}
 
 	/**
@@ -83,7 +101,6 @@ class CustomSidebars {
 	 * @since 3.0.5
 	 */
 	public function admin_init() {
-
 		$plugin_title = 'Custom Sidebars';
 		
 		/**
@@ -962,17 +979,51 @@ class CustomSidebars {
 	 * @since 3.0.1
 	 */
 	public function print_templates() {
+		if ( false == $this->check_screen() ) {
+			return;
+		}
 		wp_enqueue_script( 'wp-util' );
 ?>
 	<script type="text/html" id="tmpl-custom-sidebars-new">
-		
 		<div class="custom-sidebars-add-new">
-			
 			<p><?php esc_html_e( 'Create a custom sidebar to get started.', 'custom-sidebars' ); ?></p>
-			
 		</div>
-		
 	</script>
 <?php
+	}
+
+	/**
+	 * Inicjalize integrations.
+	 *
+	 * @since 3.1.2
+	 */
+	public function integrations() {
+		/**
+		 * 3rd party plugins integration: WPML
+		 */
+		if ( function_exists( 'icl_object_id' ) && ! defined( 'POLYLANG_VERSION' ) ) {
+			require_once CSB_INC_DIR . 'integrations/class-custom-sidebars-integration-wpml.php';
+		}
+		/**
+		 * 3rd party plugins integration: Polylang
+		 */
+		if ( defined( 'POLYLANG_VERSION' ) && POLYLANG_VERSION ) {
+			require_once CSB_INC_DIR . 'integrations/class-custom-sidebars-integration-polylang.php';
+		}
+		do_action( 'cs_integrations' );
+	}
+
+	private function check_screen() {
+		if ( ! function_exists( 'get_current_screen' ) ) {
+			return false;
+		}
+		$screen = get_current_screen();
+		if ( ! is_a( $screen, 'WP_Screen' ) ) {
+			return false;
+		}
+		if ( 'widgets' != $screen->id ) {
+			return false;
+		}
+		return true;
 	}
 };

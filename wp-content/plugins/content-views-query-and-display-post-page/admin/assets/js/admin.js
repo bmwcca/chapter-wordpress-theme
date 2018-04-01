@@ -595,12 +595,9 @@
 				$( '.pt-wrap' ).trigger( 'toggle-layout-format', [ expect_val ] );
 
 				if ( $.inArray( this_val, expect_val ) >= 0 ) {
-					// Trigger select 1-col
 					$( layout_format + '[value="1-col"]' ).trigger( 'click' );
-					// Disable 2-col
 					$( layout_format + '[value="2-col"]' ).attr( 'disabled', true );
 				} else {
-					// Enable 2-col
 					$( layout_format + '[value="2-col"]' ).attr( 'disabled', false );
 				}
 			};

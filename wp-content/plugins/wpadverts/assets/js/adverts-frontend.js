@@ -72,21 +72,30 @@ jQuery(function($) {
    
    }); 
    
-   if( $(".rslides").length > 0 ) {
-       $(".rslides").responsiveSlides({
-        auto: false,
-        pagination: true,
-        nav: true,
-        fade: 500,
-        maxwidth: 800
-      });
+   if( $(".wpadverts-slides").length > 0 ) {
+       
+        if(adverts_frontend_lang.lightbox === "1") {
+            $( '.wpadverts-swipe' ).swipebox({
+                afterMedia: function(e) {
+                    $( '#swipebox-container .wpadverts-video-player' ).each(function(index, item) {
+                        var $this = jQuery(item);
+                        
+                        if($this.data("wpadverts-single-player") != "1") {
+                            new WPADVERTS.Single.Player($this);
+                            $this.data("wpadverts-single-player", "1");
+                        }
+                    });
+                }
+            });
+        }
    }
+   
    
     $(".adverts-show-contact").click(function(e) {
         
         e.preventDefault();
         
-        $(".adverts-loader").show();
+        $(".adverts-loader").css("display", "inline-block");
         //$(".adverts-loader").addClass("animate-spin");
         
         var data = {

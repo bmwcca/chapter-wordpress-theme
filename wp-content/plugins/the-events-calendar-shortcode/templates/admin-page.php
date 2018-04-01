@@ -43,9 +43,9 @@
 					<h3>thumb</h3>
 					<p><?php echo esc_html( __( 'To show or hide thumbnail/featured image. Default is false.', 'the-events-calendar-shortcode' ) ); ?></p>
 						<blockquote>[ecs-list-events thumb='true']</blockquote>
-					<p><?php echo esc_html( __( 'You can use 2 other attributes: thumbwidth and thumbheight to customize the thumbnail size', 'the-events-calendar-shortcode' ) ); ?></p>
+					<p><?php echo sprintf( esc_html( __( 'You can use 2 other attributes: %s and %s to customize the thumbnail size', 'the-events-calendar-shortcode' ) ), 'thumbwidth', 'thumbheight' ); ?></p>
 						<blockquote>[ecs-list-events thumb='true' thumbwidth='150' thumbheight='150']</blockquote>
-					<p><?php echo esc_html( __( 'or use thumbsize to specify the pre-set size to use, for example:', 'the-events-calendar-shortcode' ) ); ?></p>
+					<p><?php echo sprintf( esc_html( __( 'or use %s to specify the pre-set size to use, for example:', 'the-events-calendar-shortcode' ) ), 'thumbsize' ); ?></p>
 						<blockquote>[ecs-list-events thumb='true' thumbsize='large']</blockquote>
 
 					<h3>message</h3>
@@ -70,6 +70,8 @@
 					<h3>orderby</h3>
 					<p><?php echo esc_html( __( 'Used to order by the end date instead of the start date.', 'the-events-calendar-shortcode' ) ); ?></p>
 						<blockquote>[ecs-list-events orderby='enddate']</blockquote>
+                    <p><?php echo esc_html( __( 'You can also use this to order by title if you wish:', 'the-events-calendar-shortcode' ) ); ?></p>
+                        <blockquote>[ecs-list-events orderby='title']</blockquote>
 					<?php do_action( 'ecs_admin_page_options_after' ); ?>
 
 				</div>
@@ -101,8 +103,9 @@
 						<div id="ecs-pro-designs">
 							<p><a target="_blank" href="https://eventcalendarnewsletter.com/the-events-calendar-shortcode?utm_source=plugin&utm_medium=link&utm_campaign=tecs-help-design-image-1&utm_content=description"><img alt="" style="width: 300px;" src="<?php echo plugins_url( '/static/shortcode-default-design-2.png', TECS_CORE_PLUGIN_FILE ) ?>"><br><?php echo esc_html( __( 'Pro version default design example', 'the-events-calendar-shortcode' ) ); ?></a></p>
 							<p><a target="_blank" href="https://eventcalendarnewsletter.com/the-events-calendar-shortcode?utm_source=plugin&utm_medium=link&utm_campaign=tecs-help-design-image-2&utm_content=description"><img alt="" style="width: 300px;" src="<?php echo plugins_url( '/static/event-calendar-shortcode-compact-design.png', TECS_CORE_PLUGIN_FILE ) ?>"><br><?php echo esc_html( __( 'Pro version compact design example', 'the-events-calendar-shortcode' ) ); ?></a></p>
-							<p><a target="_blank" href="https://eventcalendarnewsletter.com/the-events-calendar-shortcode?utm_source=plugin&utm_medium=link&utm_campaign=tecs-help-design-image-grouped&utm_content=description"><img alt="" style="width: 300px;" src="<?php echo plugins_url( '/static/the-events-calendar-shortcode-grouped-design.png', TECS_CORE_PLUGIN_FILE ) ?>"><br><?php echo esc_html( __( 'Pro version grouped design example', 'the-events-calendar-shortcode' ) ); ?></a></p>
-							<p><a target="_blank" href="https://eventcalendarnewsletter.com/the-events-calendar-shortcode?utm_source=plugin&utm_medium=link&utm_campaign=tecs-help-design-image-calendar&utm_content=description"><img alt="" style="width: 300px;" src="<?php echo plugins_url( '/static/the-events-calendar-shortcode-calendar-design.gif', TECS_CORE_PLUGIN_FILE ) ?>"><br><?php echo esc_html( __( 'Pro version calendar design example', 'the-events-calendar-shortcode' ) ); ?></a></p>
+                            <p><a target="_blank" href="https://eventcalendarnewsletter.com/the-events-calendar-shortcode?utm_source=plugin&utm_medium=link&utm_campaign=tecs-help-design-image-calendar&utm_content=description"><img alt="" style="width: 300px;" src="<?php echo plugins_url( '/static/the-events-calendar-shortcode-calendar-demo.gif', TECS_CORE_PLUGIN_FILE ) ?>"><br><?php echo esc_html( __( 'Pro version calendar design example', 'the-events-calendar-shortcode' ) ); ?></a></p>
+                            <p><a target="_blank" href="https://eventcalendarnewsletter.com/the-events-calendar-shortcode?utm_source=plugin&utm_medium=link&utm_campaign=tecs-help-design-image-columns&utm_content=description"><img alt="" style="width: 300px;" src="<?php echo plugins_url( '/static/the-events-calendar-shortcode-columns-photo-horizontal-design.png', TECS_CORE_PLUGIN_FILE ) ?>"><br><?php echo esc_html( __( 'Pro version horizontal/columns/photos design example', 'the-events-calendar-shortcode' ) ); ?></a></p>
+                            <p><a target="_blank" href="https://eventcalendarnewsletter.com/the-events-calendar-shortcode?utm_source=plugin&utm_medium=link&utm_campaign=tecs-help-design-image-grouped&utm_content=description"><img alt="" style="width: 300px;" src="<?php echo plugins_url( '/static/the-events-calendar-shortcode-grouped-design.png', TECS_CORE_PLUGIN_FILE ) ?>"><br><?php echo esc_html( __( 'Pro version grouped design example', 'the-events-calendar-shortcode' ) ); ?></a></p>
 						</div>
 
 						<h3 class="additional-options"><?php echo esc_html__( "In addition to designs, you'll get more options including:", 'the-events-calendar-shortcode' ); ?></h3>
@@ -130,8 +133,7 @@
 						<p><?php echo esc_html__( 'Only show events in the future even when using the month or year option.', 'the-events-calendar-shortcode' ) ?></p>
 						<h4><?php echo esc_html__( 'Custom Design', 'the-events-calendar-shortcode' ) ?></h4>
 						<p><?php echo esc_html__( 'Use the new default or compact designs, or create your own using one or more templates in your theme folder', 'the-events-calendar-shortcode' ) ?></p>
-						<p><?php echo sprintf( esc_html__( '%sGet The Events Calendar Shortcode PRO%s', 'the-events-calendar-shortcode' ), '<a class="ecs-button" target="_blank" href="https://eventcalendarnewsletter.com/the-events-calendar-shortcode?utm_source=plugin&utm_medium=link&utm_campaign=tecs-help-after-options&utm_content=description">', '</a>' ); ?></p>
-
+						<p><?php echo sprintf( esc_html__( '%sGet The Events Calendar Shortcode PRO%s', 'the-events-calendar-shortcode' ), '<a class="ecs-button" target="_blank" href="https://eventcalendarnewsletter.com/the-events-calendar-shortcode?utm_source=plugin&utm_medium=link&utm_campaign=tecs-help-after-options&utm_content=description">', '</a>' ); ?> or <a href="https://demo.eventcalendarnewsletter.com/the-events-calendar-shortcode/">see it in action</p>
 					</div>
 				<?php endif; ?>
 			</td>

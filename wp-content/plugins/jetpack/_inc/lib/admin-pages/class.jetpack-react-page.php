@@ -198,7 +198,7 @@ class Jetpack_React_Page extends Jetpack_Admin_Page {
 		// Enqueue jp.js and localize it
 		wp_enqueue_script( 'react-plugin', plugins_url( '_inc/build/admin.js', JETPACK__PLUGIN_FILE ), array(), JETPACK__VERSION, true );
 
-		if ( ! $is_dev_mode ) {
+		if ( ! $is_dev_mode && Jetpack::is_active() ) {
 			// Required for Analytics
 			wp_enqueue_script( 'jp-tracks', '//stats.wp.com/w.js', array(), gmdate( 'YW' ), true );
 		}
@@ -393,6 +393,7 @@ function jetpack_current_user_data() {
 		'isConnected' => Jetpack::is_user_connected( $current_user->ID ),
 		'isMaster'    => $is_master_user,
 		'username'    => $current_user->user_login,
+		'id'          => $current_user->ID,
 		'wpcomUser'   => $dotcom_data,
 		'gravatar'    => get_avatar( $current_user->ID, 40, 'mm', '', array( 'force_display' => true ) ),
 		'permissions' => array(

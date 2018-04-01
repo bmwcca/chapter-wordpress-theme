@@ -303,10 +303,11 @@ function adverts_price( $price ) {
 }
 
 /**
+ * Returns formatted price.
  * 
- * @param float $price  Price to format
- * @param int $post_id
- * @return string       Formatted Price
+ * @param float     $post_id    Price to format
+ * @param int       price
+ * @return string               Formatted Price
  */
 function adverts_get_the_price( $post_id = null, $price = null ) {
     
@@ -327,28 +328,49 @@ function adverts_get_the_price( $post_id = null, $price = null ) {
  * Function returns either the main image or first image on the list if the main
  * image was not selected.
  * 
- * @param int $id Post ID
  * @since 0.1
- * @return mixed Image URL or NULL
+ * @since 1.2.1 - The main image is a first image on the list if Featured image is not selected.
+ * 
+ * @param   int     $id     Post ID
+ * @return  mixed           Image URL or NULL
  */
 function adverts_get_main_image( $id ) {
     
-    $thumb_id = get_post_thumbnail_id( $id );
+    $thumb_id = get_post_thumbnail_id( $id );   
     
     if($thumb_id) {
         $image = wp_get_attachment_image_src( $thumb_id, 'adverts-list' );
-    } else {
-        foreach(get_children(array('post_parent'=>$id, 'numberposts'=>1)) as $tmp_post) {
-            $image = wp_get_attachment_image_src( $tmp_post->ID , 'adverts-list' ); 
+        
+        if(isset( $image[0] ) ) {
+            return $image[0];
         }
-    }
+    } 
     
-    if(isset($image[0])) {
-        return $image[0];
-    } else {
+    $children = get_children( array( 'post_parent' => $id ) );
+    $attach = array();
+
+    if( empty( $children ) ) {
         return null;
     }
+
+    if( isset( $children[$thumb_id] ) ) {
+        $attach[$thumb_id] = $children[$thumb_id];
+        unset($children[$thumb_id]);
+    }
+
+    $attach += $children;
+    $images = adverts_sort_images($attach, $id);
     
+    foreach($images as $tmp_post) {
+        $image = wp_get_attachment_image_src( $tmp_post->ID , 'adverts-list' ); 
+        
+        if(isset( $image[0] ) ) {
+            return $image[0];
+        }
+        
+    }
+    
+    return null;
 }
 
 /**
@@ -516,6 +538,34 @@ function adverts_field_has_validator( $field, $validator ) {
     foreach($field["validator"] as $v) {
         if($v["name"] == $validator) {
             return true;
+        }
+    }
+    
+    return false;
+}
+
+/**
+ * Checks if Adverts_Form field is required
+ * 
+ * The required field is a field with "is_required" or "upload_limit:min>0" 
+ * validator.
+ * 
+ * @param array $field
+ * @param string $validator
+ * @since 0.1
+ * @return boolean
+ */
+function adverts_field_is_required( $field ) {
+    
+    if( adverts_field_has_validator( $field, "is_required") ) {
+        return true;
+    }
+    
+    if( adverts_field_has_validator( $field, "upload_limit" ) ) {
+        foreach($field["validator"] as $v) {
+            if($v["name"] == "upload_limit" && isset( $v["params"]["min"] ) && $v["params"]["min"] > 0 ) {
+                return true;
+            }
         }
     }
     
@@ -738,6 +788,243 @@ function adverts_max_choices( $data, $params = null ) {
 }
 
 /**
+ * Upload Limit VALIDATOR
+ * 
+ * This validator checks if user have reached maximum files upload limit.
+ * 
+ * @param array $file       An item from $_FILES array
+ * @param array $params     Validation parameters (integer files)
+ * @since 1.2.0
+ * @return string|boolean
+ */
+function adverts_validate_upload_limit( $file, $params = null ) {
+   
+    $post_id = intval( adverts_request( "post_id" ) );
+    
+    if( $post_id === 0 ) {
+        $post_id = intval( adverts_request( "_post_id" ) );
+    } 
+    
+    if( $post_id === 0 ) {
+        $post_id = intval( adverts_request( "advert_id" ) );
+    }
+
+    if( defined( "DOING_AJAX" ) && DOING_AJAX ) {
+        $ignore_min_limit = true;
+    } else {
+        $ignore_min_limit = false;
+    }
+    
+    if( $post_id > 0 ) {
+        $attachments = get_children( array( 'post_parent' => $post_id ) );
+        $images = count( $attachments );
+    } else {
+        $images = 0;
+    }
+    
+    if( $file === null ) {
+        $i = 0;
+    } else {
+        $i = 1;
+    }
+
+    if( isset( $params["max"] ) && $images + $i > $params["max"] ) {
+        return "max_limit";
+    }
+    
+    if( $ignore_min_limit ) {
+        return true;
+    }
+    
+    if( $file === null && isset( $params["min"] ) && $images < $params["min"] ) {
+        return "min_limit";
+    }
+    
+    return true;
+}
+
+/**
+ * File Size Upload VALIDATOR
+ * 
+ * Checks if uploaded file size is allowed
+ * 
+ * @param array $file       An item from $_FILES array
+ * @param array $params     Validation parameters (integer files)
+ * @since 1.2.0
+ * @return string|boolean
+ */
+function adverts_validate_upload_size( $file, $params = null ) {
+    
+    if ( !isset($file["name"]) || !isset($file["size"]) ) {
+        return true;
+    }
+    
+    $arr = array( "too_big" => "max", "too_small" => "min" );
+    
+    foreach( $arr as $err => $prop ) {
+        
+        if( ! isset( $params[$prop] ) || empty( $params[$prop] ) ) {
+            continue;
+        }
+        
+        $size = str_replace( array( " " ), array( "" ), $params[$prop] );
+        $size = trim( $size );
+
+        $number = substr( $size, 0, -2 );
+
+        switch( strtoupper( substr( $size, -2 ) ) ) {
+            case "KB":
+                $fsize = $number*1024;
+                break;
+            case "MB":
+                $fsize = $number*pow(1024,2);
+                break;
+            case "GB":
+                $fsize = $number*pow(1024,3);
+                break;
+            case "TB":
+                $fsize = $number*pow(1024,4);
+                break;
+            case "PB":
+                $fsize = $number*pow(1024,5);
+                break;
+            default:
+                $fsize = $size;
+                break;
+        }
+
+        if( $prop == "max" && $file["size"] > $fsize ) {
+            return $err;
+        }
+        if( $prop == "min" && $file["size"] < $fsize ) {
+            return $err;
+        }
+    }
+    
+    return true;
+    
+
+}
+
+/**
+ * File Type Upload VALIDATOR
+ * 
+ * Checks if uploaded file extensions is allowed in the configuration
+ * 
+ * @param array $file       An item from $_FILES array
+ * @param array $params     Validation parameters (integer files)
+ * @since 1.2.0
+ * @return string|boolean
+ */
+function adverts_validate_upload_type( $file, $params = null ) {
+    
+    if ( !isset($file["name"]) || !isset($file["type"]) ) {
+        return true;
+    }
+    
+    if( isset( $params["allowed"] ) ) {
+        $a = $params["allowed"];
+    } else {
+        $a = array();
+    }
+    
+    $ext = strtolower( pathinfo($file["name"], PATHINFO_EXTENSION) );
+    $type = strtolower( $file["type"] );
+
+    if( isset( $params["extensions"] ) && is_array( $params["extensions"] ) ) {
+        $allowed_ext = array_map( "trim", $params["extensions"] );
+    } else {
+        $allowed_ext = array();
+    }
+    
+    if( isset( $params["types"] ) && is_array( $params["types"] ) ) {
+        $allowed_types = array_map( "trim", $params["types"] );
+        $has_types = true;
+    } else {
+        $allowed_types = array();
+        $has_types = false;
+    }
+    
+    if( in_array( "video", $a ) ) {
+        $allowed_types = array_merge( $allowed_types, array( "video/webm", "video/mp4", "video/ogv" ) );
+        $allowed_ext = array_merge( $allowed_ext, array( "webm", "mp4", "ogv" ) );
+    }
+    
+    if( in_array( "audio", $a ) ) {
+        $allowed_types = array_merge( $allowed_types, array( "audio/webm", "audio/mp4", "audio/ogg") );
+        $allowed_ext = array_merge( $allowed_ext, array( "webm", "mp4", "ogg" ) );
+    }
+    
+    if( in_array( "image", $a ) ) {
+        $allowed_types = array_merge( $allowed_types, array( "image/jpeg", "image/jpe", "image/jpg", "image/gif", "image/png" ) );
+        $allowed_ext = array_merge( $allowed_ext, array( "jpeg", "jpe", "jpg", "gif", "png" ) );
+    }
+
+    if( in_array( $ext, $allowed_ext) && ( in_array( $type, $allowed_types ) || ! $has_types ) ) {
+        return true;
+    } else {
+        return "invalid";
+    }
+}
+
+/**
+ * File (image) Dimensions VALIDATOR
+ * 
+ * Checks if uploaded image size (as in width and height) is within allowed
+ * image dimensions
+ * 
+ * $params
+ * - strict (boolean) - if true the validation will fail if image size cannot be checked
+ * - min_width (int) - minimum image width
+ * - min_height (int) - minimum image height
+ * - max_width (int) - maximum image width
+ * - max_height (int) - maximum image height
+ * 
+ * @param array $file       An item from $_FILES array
+ * @param array $params     Validation parameters (integer files)
+ * @since 1.2.0
+ * @return string|boolean
+ */
+function adverts_validate_upload_dimensions( $file, $params = null ) {
+    if( ! isset( $file["type"]) || stripos( $file["type"], "image/" ) !== 0 ) {
+        // this validator is applied to images only for other files it returns true
+        return true;
+    } 
+    
+    $imagesize = getimagesize( $file["tmp_name"] );
+    
+    if( $imagesize === false ) {
+        // cannot check image size, if size check is required return error
+        // otherwise accept the uploaded image
+        if( isset( $params["strict"] ) && $params["strict"] ) {
+            return "cannot_check";
+        } else {
+            return true;
+        }
+    }
+    
+    list( $width, $height ) = $imagesize;
+    
+    if( isset( $params["min_width"] ) && $params["min_width"] && $width < $params["min_width"] ) {
+        return "incorrect_min_width";
+    }
+    
+    if( isset( $params["max_width"] ) && $params["max_width"] && $width > $params["max_width"] ) {
+        return "incorrect_max_width";
+    }
+
+    if( isset( $params["min_height"] ) && $params["min_height"] && $height < $params["min_height"] ) {
+        return "incorrect_min_height";
+    }
+    
+    if( isset( $params["max_height"] ) && $params["max_height"] && $height > $params["max_height"] ) {
+        return "incorrect_max_height";
+    }
+    
+    return true;
+}
+
+/**
  * Money To Float FILTER
  * 
  * Filters currency and returns it as a float
@@ -897,6 +1184,46 @@ function adverts_field_text( $field ) {
     echo $html->render();
 }
 
+
+/**
+ * Form input text renderer
+ * 
+ * Prints (to browser) HTML for <input type="text" /> input
+ * 
+ * $field params:
+ * - name: string
+ * - value: mixed (scalar or array)
+ * - class: string (HTML class attribute)
+ * - placeholder: string
+ * 
+ * @param array $field
+ * @since 0.1
+ * @return void
+ */
+function adverts_field_password( $field ) {
+    
+    $attr = array(
+        "type" => "password",
+        "name" => $field["name"],
+        "id" => $field["name"],
+        "value" => isset($field["value"]) ? $field["value"] : "",
+        "placeholder" => isset($field["placeholder"]) ? $field["placeholder"] : null,
+        "class" => isset($field["class"]) ? $field["class"] : null
+    );
+    
+    if( isset( $field["attr"] ) && is_array( $field["attr"] ) ) {
+        foreach( $field["attr"] as $key => $value ) {
+            if( $value !== null && is_scalar( $value ) ) {
+                $attr[$key] = $value;
+            }
+        }
+    }
+    
+    $html = new Adverts_Html( "input", $attr );
+    
+    echo $html->render();
+}
+
 /**
  * Form dropdown renderer
  * 
@@ -961,7 +1288,7 @@ function adverts_field_select( $field ) {
         }
     }
 
-    if(isset($field["options_callback"])) {
+    if(isset($field["options_callback"]) && !empty($field["options_callback"])) {
         $opt = call_user_func( $field["options_callback"] );
     } elseif(isset($field["options"])) {
         $opt = $field["options"];
@@ -1097,7 +1424,7 @@ function adverts_field_checkbox( $field ) {
         $value = $field["value"];
     }
     
-    if(isset($field["options_callback"])) {
+    if(isset($field["options_callback"]) && !empty($field["options_callback"])) {
         $opt = call_user_func( $field["options_callback"] );
     } elseif(isset($field["options"])) {
         $opt = $field["options"];
@@ -1174,6 +1501,10 @@ function adverts_field_radio( $field ) {
     $opts = "";
     $i = 1;
     
+    if( !isset( $field["rows"] ) ) {
+        $field["rows"] = 1;
+    }
+    
     if( !isset( $field["value"] ) ) {
         $value = null;
     } else {
@@ -1198,7 +1529,13 @@ function adverts_field_radio( $field ) {
         $i++;
     }
     
-    echo Adverts_Html::build("div", array("class"=>"adverts-form-input-group adverts-form-input-group-radio"), $opts);
+    $wrap_classes = array(
+        "adverts-form-input-group",
+        "adverts-form-input-group-radio",
+        "adverts-field-rows-" . absint( $field["rows"] )
+    );
+    
+    echo Adverts_Html::build("div", array( "class" => join( " ", $wrap_classes ) ), $opts);
 }
 
 /**
@@ -1481,7 +1818,7 @@ function adverts_form_layout_config(Adverts_Form $form, $options = array()) {
             <th scope="row">
                 <label <?php if(!in_array($field['type'], $a)): ?>for="<?php esc_attr_e($field["name"]) ?>"<?php endif; ?>>
                     <?php esc_html_e($field["label"]) ?>
-                    <?php if(adverts_field_has_validator($field, "is_required")): ?><span class="adverts-red">&nbsp;*</span><?php endif; ?>
+                    <?php if(adverts_field_is_required($field)): ?><span class="adverts-red">&nbsp;*</span><?php endif; ?>
                 </label>
             </th>
             <td class="">
@@ -1635,6 +1972,7 @@ function adverts_currency_list( $currency = null, $get = null ) {
         array("code"=>"RIAL", "sign"=>"", "label"=>__("Iranian Rial", "adverts")),
         array("code"=>"RUB", "sign"=>"", "label"=>__("Russian Rubles", "adverts")),
         array("code"=>"ZAR", "sign"=>"R", "label"=>__("South African Rand", "adverts")),
+        array("code"=>"LKR", "sign"=>"Rs. ", "label"=>__("Sri Lankan Rupees", "adverts")),
     ));
     
     if( $currency == null ) {
@@ -1907,6 +2245,129 @@ function adverts_sort_images($images, $post_id) {
 }
 
 /**
+ * Returns post mime type
+ * 
+ * Possible return values are
+ * - image: jpg, gif or png that is an image which can be displayed in browser
+ * - video: webm, mp4 or ogv that is any video which can be played in the browser
+ * - other: any other mime type
+ * 
+ * @since 1.2.0
+ * @param WP_Post $attach   Post for which we want to find mime
+ * @return string           Mime type (one of video, image, other)
+ */
+function adverts_get_attachment_mime( $attach ) {
+
+    $known = array(
+        "video" => array( "video/webm", "video/mp4", "video/ogv" ),
+        "image" => array( "image/jpeg", "image/jpe", "image/jpg", "image/gif", "image/png" )
+    );
+    
+    foreach( $known as $key => $mimes ) {
+        if( in_array( $attach->post_mime_type, $mimes ) ) {
+            return $key;
+        }
+    }
+    
+    return "other";
+}
+
+/**
+ * Returns a Font-Awesome icon for WP_Post::post_mime_type
+ * 
+ * If the mime type is not in a list of known mime types a default icon is returned
+ * 
+ * @since 1.2.0
+ * @param WP_Post   $attach     Attachment for which icon should be returned
+ * @return string               Font-Awesome icon code
+ */
+function adverts_get_attachment_icon( $attach ) {
+    
+    $mime = adverts_get_attachment_mime( $attach );
+    
+    if( $mime === "video" ) {
+        return "adverts-icon-file-video";
+    } else if( $mime === "image" ) {
+        return "adverts-icon-file-image";
+    }
+    
+    $known = array(
+        "adverts-icon-file-pdf" => array( "application/x-pdf", "application/pdf" ),
+        "adverts-icon-file-archive" => array( "application/zip", "application/octet-stream" )
+    );
+    
+    foreach( $known as $icon => $mimes ) {
+        if( in_array( $attach->post_mime_type, $mimes ) ) {
+            return $icon;
+        }
+    }
+
+    return "adverts-icon-doc-text";
+}
+
+/**
+ * Returns an image with selected size
+ * 
+ * The size can be an array then the function will iterate over the array and
+ * will return an URL to the first existing image
+ * 
+ * Allowed sizes are: full, adverts_gallery, adverts_upload_thumbnail
+ * 
+ * @since   1.2.0
+ * @param   WP_Post|int     $post_id    Advert object or Advert ID
+ * @param   array           $sizes      List of sizes to check
+ * @return  array                       Keys [width, height, is_intermidiate, orient]
+ */
+function adverts_get_post_img( $post_id, $sizes ) {
+    if( $post_id instanceof WP_Post ) {
+        $post_id = $post_id->ID;
+    }
+    
+    $upload = adverts_upload_item_data( $post_id );
+    
+    foreach( $sizes as $size ) {
+        if( isset( $upload["sizes"][$size] ) ) {
+            $img = $upload["sizes"][$size];
+            
+            if($img["width"] == $img["height"]) {
+                $img["orient"] = "square";
+            } else if($img["width"] > $img["height"] ) {
+                $img["orient"] = "landscape";
+            } else {
+                $img["orient"] = "portrait";
+            }
+            
+            return $img;
+        }
+    }
+    
+    return null;
+}
+
+/**
+ * Return an URL to image with selected size
+ * 
+ * The size can be an array then the function will iterate over the array and
+ * will return an URL to the first existing image
+ * 
+ * Allowed sizes are: full, adverts_gallery, adverts_upload_thumbnail
+ * 
+ * @since   1.2.0
+ * @param   WP_Post|int     $post_id    Advert object or Advert ID
+ * @param   array           $sizes      List of sizes to check
+ * @return  string                      URL to the image
+ */
+function adverts_get_post_img_url( $post_id, $sizes ) {
+    $img = adverts_get_post_img( $post_id, $sizes );
+    
+    if($img === null) {
+        return null;
+    } else {
+        return $img["url"];
+    }
+}
+
+/**
  * Renders slider on Ad details page.
  * 
  * This function is called by adverts_tpl_single_top action in
@@ -1919,46 +2380,11 @@ function adverts_sort_images($images, $post_id) {
  * @return void
  */
 function adverts_single_rslides( $post_id ) {
-    
-    $children = get_children( array( 'post_parent' => $post_id ) );
-    $thumb_id = get_post_thumbnail_id( $post_id );
-    $images = array();
-    
-    if( empty( $children ) ) {
-        return;
-    }
-    
-    if( isset( $children[$thumb_id] ) ) {
-        $images[$thumb_id] = $children[$thumb_id];
-        unset($children[$thumb_id]);
-    }
-    
-    $images += $children;
-    $images = adverts_sort_images($images, $post_id);
 
-    wp_enqueue_script( 'responsive-slides' );
+    include_once ADVERTS_PATH . "/includes/class-gallery-helper.php";
     
-    ?>
-    <div class="rslides_container">
-        <ul id="slides1" class="rslides rslides1">
-            <?php foreach($images as $tmp_post): ?>
-                <?php $image = wp_get_attachment_image_src( $tmp_post->ID, 'large' ) ?>
-                <?php if(isset($image[0])): ?>
-                <li>
-                    <img src="<?php esc_attr_e($image[0]) ?>" alt="">
-
-                    <?php if($tmp_post->post_excerpt || $tmp_post->post_content): ?>
-                    <p class="caption">
-                        <strong><?php esc_html_e($tmp_post->post_excerpt) ?></strong>
-                        <?php esc_html_e($tmp_post->post_content) ?>
-                    </p>
-                    <?php endif; ?>
-                </li>
-                <?php endif; ?>
-            <?php endforeach; ?>
-        </ul>
-    </div>   
-    <?php    
+    $gallery_helper = new Adverts_Gallery_Helper( $post_id );
+    $gallery_helper->render_gallery();
 }
 
 /**
@@ -2169,4 +2595,23 @@ function adverts_add_menu_classes( $menu ) {
     
     
     return $menu;
+}
+
+/**
+ * Checks if current user can edit images in gallery
+ * 
+ * Returns true if current user has the capability set in wp-admin / Classifieds 
+ * / Options / Core / Gallery panel.
+ * 
+ * @since 1.2
+ * @return boolean
+ */
+function adverts_user_can_edit_image( ) {
+    $cap = adverts_config( "gallery.image_edit_cap" );
+    
+    if( empty( $cap ) ) {
+        return true;
+    }
+    
+    return current_user_can( $cap );
 }

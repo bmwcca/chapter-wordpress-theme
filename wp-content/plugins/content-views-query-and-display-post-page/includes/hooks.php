@@ -162,7 +162,7 @@ if ( !class_exists( 'PT_CV_Hooks' ) ) {
 			$format	 = PT_CV_Functions::setting_value( PT_CV_PREFIX . 'layout-format' );
 			$nowrap	 = PT_CV_Functions::setting_value( PT_CV_PREFIX . 'lf-nowrap' );
 
-			if ( $format === '2-col' && $nowrap ) {
+			if ( !empty( $args[ 'thumbnail' ] ) && $format === '2-col' && $nowrap ) {
 				$exclude_fields = apply_filters( PT_CV_PREFIX_ . '2col_nowrap_fields', array( 'thumbnail' ) );
 
 				if ( PT_CV_Functions::get_global_variable( 'view_type' ) === 'collapsible' ) {

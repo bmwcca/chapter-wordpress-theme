@@ -17,7 +17,7 @@
 
 			setTimeout( function() {
 				if ( $popup_container.hasClass( 'et_bloom_trigger_click' ) ) {
-					$popup_container.removeClass( 'et_bloom_visible et_bloom_animated' );
+					$popup_container.removeClass( 'et_bloom_visible et_bloom_animated et_bloom_exit_animation' );
 				} else {
 					$popup_container.remove();
 				}
@@ -33,7 +33,7 @@
 				return;
 			}
 
-			var $optin_id = $this_button.data( 'optin_id' ),
+			var $optin_id = typeof $this_button.data( 'current_optin_id' ) !== 'undefined' ? $this_button.data( 'current_optin_id' ) : $this_button.data( 'optin_id' ),
 				$page_id = $this_button.data( 'page_id' ),
 				$list_id = $this_button.data( 'list_id' );
 
@@ -121,9 +121,10 @@
 		}
 
 		function auto_popup( $current_popup_auto, $delay ) {
-			var page_id = $current_popup_auto.find( '.et_bloom_submit_subscription' ).data( 'page_id' ),
-				optin_id = $current_popup_auto.find( '.et_bloom_submit_subscription' ).data( 'optin_id' ),
-				list_id = $current_popup_auto.find( '.et_bloom_submit_subscription' ).data( 'list_id' );
+			var $data_holder = $current_popup_auto.find( '.et_bloom_custom_html_form' ).length ? $current_popup_auto.find( '.et_bloom_custom_html_form' ) : $current_popup_auto.find( '.et_bloom_submit_subscription' ),
+				page_id = $data_holder.data( 'page_id' ),
+				optin_id = $data_holder.data( 'optin_id' ),
+				list_id = $data_holder.data( 'list_id' );
 
 			if ( ! $current_popup_auto.hasClass( 'et_bloom_animated' ) ) {
 				var $cookies_expire_auto = $current_popup_auto.data( 'cookie_duration' ) ? $current_popup_auto.data( 'cookie_duration' ) : false,
@@ -139,20 +140,21 @@
 			}
 		}
 
-		function scroll_trigger( current_popup_bottom, is_bottom_trigger ) {
+		function scroll_trigger( $current_popup_bottom, is_bottom_trigger ) {
 			var triggered = 0,
-				page_id = current_popup_bottom.find( '.et_bloom_submit_subscription' ).data( 'page_id' ),
-				optin_id = current_popup_bottom.find( '.et_bloom_submit_subscription' ).data( 'optin_id' );
-				list_id = current_popup_bottom.find( '.et_bloom_submit_subscription' ).data( 'list_id' );
+				$data_holder = $current_popup_bottom.find( '.et_bloom_custom_html_form' ).length ? $current_popup_bottom.find( '.et_bloom_custom_html_form' ) : $current_popup_bottom.find( '.et_bloom_submit_subscription' ),
+				page_id = $data_holder.data( 'page_id' ),
+				optin_id = $data_holder.data( 'optin_id' );
+				list_id = $data_holder.data( 'list_id' );
 
-			if ( ! current_popup_bottom.hasClass( 'et_bloom_animated' ) ) {
-				var	cookies_expire_bottom = current_popup_bottom.data( 'cookie_duration' ) ? current_popup_bottom.data( 'cookie_duration' ) : false,
+			if ( ! $current_popup_bottom.hasClass( 'et_bloom_animated' ) ) {
+				var	cookies_expire_bottom = $current_popup_bottom.data( 'cookie_duration' ) ? $current_popup_bottom.data( 'cookie_duration' ) : false,
 					$already_subscribed = checkCookieValue( 'et_bloom_subscribed_to_' + optin_id + list_id, 'true' );
 
 				if ( true == is_bottom_trigger ) {
 					var scroll_trigger = $( '.et_bloom_bottom_trigger' ).length ? $( '.et_bloom_bottom_trigger' ).offset().top : $( document ).height() - 500;
 				} else {
-					var scroll_pos = current_popup_bottom.data( 'scroll_pos' ) > 100 ? 100 : current_popup_bottom.data( 'scroll_pos' ),
+					var scroll_pos = $current_popup_bottom.data( 'scroll_pos' ) > 100 ? 100 : $current_popup_bottom.data( 'scroll_pos' ),
 						scroll_trigger = 100 == scroll_pos ? $( document ).height() - 50 : $( document ).height() * scroll_pos / 100;
 				}
 
@@ -161,9 +163,9 @@
 						if( $( window ).scrollTop() + $( window ).height() > scroll_trigger ) {
 							if ( 0 == triggered ) {
 								if ( false !== cookies_expire_bottom ) {
-									make_popup_visible ( current_popup_bottom, 0, cookies_expire_bottom, 'etBloomCookie_' + optin_id + '=true' );
+									make_popup_visible ( $current_popup_bottom, 0, cookies_expire_bottom, 'etBloomCookie_' + optin_id + '=true' );
 								} else {
-									make_popup_visible ( current_popup_bottom, 0, '', '' );
+									make_popup_visible ( $current_popup_bottom, 0, '', '' );
 								}
 
 								triggered++;
@@ -213,15 +215,16 @@
 
 		if( $( '.et_bloom_trigger_idle' ).length ) {
 			$( '.et_bloom_trigger_idle:not(.et_bloom_visible)' ).each( function() {
-				var this_el = $( this ),
-					page_id = this_el.find( '.et_bloom_submit_subscription' ).data( 'page_id' ),
-					optin_id = this_el.find( '.et_bloom_submit_subscription' ).data( 'optin_id' ),
-					list_id = this_el.find( '.et_bloom_submit_subscription' ).data( 'list_id' );
+				var $this_el = $( this ),
+					$data_holder = $this_el.find( '.et_bloom_custom_html_form' ).length ? $this_el.find( '.et_bloom_custom_html_form' ) : $this_el.find( '.et_bloom_submit_subscription' ),
+					page_id = $data_holder.data( 'page_id' ),
+					optin_id = $data_holder.data( 'optin_id' ),
+					list_id = $data_holder.data( 'list_id' );
 
-				if ( ! this_el.hasClass( 'et_bloom_animated' ) ) {
-					var $cookies_expire_idle = this_el.data( 'cookie_duration' ) ? this_el.data( 'cookie_duration' ) : false,
+				if ( ! $this_el.hasClass( 'et_bloom_animated' ) ) {
+					var $cookies_expire_idle = $this_el.data( 'cookie_duration' ) ? $this_el.data( 'cookie_duration' ) : false,
 						$already_subscribed = checkCookieValue( 'et_bloom_subscribed_to_' + optin_id + list_id, 'true' );
-						$idle_timeout = '' !== this_el.data( 'idle_timeout' ) ? this_el.data( 'idle_timeout' ) * 1000 : 30000,
+						$idle_timeout = '' !== $this_el.data( 'idle_timeout' ) ? $this_el.data( 'idle_timeout' ) * 1000 : 30000,
 						$delay = 0;
 
 					if ( ( ( false !== $cookies_expire_idle && ! checkCookieValue( 'etBloomCookie_' + optin_id, 'true' ) ) || false == $cookies_expire_idle ) && ! $already_subscribed ) {
@@ -229,9 +232,9 @@
 
 						$( document ).on( 'idle.idleTimer', function() {
 							if ( false !== $cookies_expire_idle ) {
-								make_popup_visible ( this_el, $delay, $cookies_expire_idle, 'etBloomCookie_' + optin_id + '=true' );
+								make_popup_visible ( $this_el, $delay, $cookies_expire_idle, 'etBloomCookie_' + optin_id + '=true' );
 							} else {
-								make_popup_visible ( this_el, $delay, '', '' );
+								make_popup_visible ( $this_el, $delay, '', '' );
 							}
 						});
 					}
@@ -277,12 +280,12 @@
 		}
 
 		$( 'body' ).on( 'click', '.et_bloom_locked_container .et_bloom_submit_subscription', function(){
-			var current_container = $( this ).closest( '.et_bloom_locked_container' ),
-				container_id = current_container.data( 'container_id' ),
-				page_id = current_container.data( 'page_id' ),
-				optin_id = current_container.data( 'optin_id' );
+			var $current_container = $( this ).closest( '.et_bloom_locked_container' ),
+				container_id = $current_container.data( 'container_id' ),
+				page_id = $current_container.data( 'page_id' ),
+				optin_id = typeof $current_container.data( 'current_optin_id' ) !== 'undefined' ? $current_container.data( 'current_optin_id' ) : $current_container.data( 'optin_id' );
 
-			perform_subscription( $( this ), current_container, container_id, page_id, optin_id );
+			perform_subscription( $( this ), $current_container, container_id, page_id, optin_id );
 
 			return false;
 		});
@@ -396,7 +399,11 @@
 				optin_id = this_button.data( 'optin_id' ),
 				disable_dbl_optin = this_button.data( 'disable_dbl_optin' ),
 				$popup_container = this_form.closest( '.et_bloom_optin' ),
-				is_popup = $popup_container.hasClass( 'et_bloom_popup' ) || $popup_container.hasClass( 'et_bloom_flyin' );
+				is_popup = $popup_container.hasClass( 'et_bloom_popup' ) || $popup_container.hasClass( 'et_bloom_flyin' ),
+				$success_action_el = this_button.closest('.et_bloom_success_action'),
+				success_action_details = $success_action_el.length > 0 ? $success_action_el.parent().data( 'success_action_details' ).split( '|' ) : [],
+				success_action = 2 === success_action_details.length ? success_action_details[0] : '',
+				success_action_url = '' !== success_action ? success_action_details[1] : '';
 
 			this_form.find( '.et_bloom_subscribe_email input' ).removeClass( 'et_bloom_warn_field' );
 
@@ -430,10 +437,15 @@
 									this_form.parent().parent().find( '.et_bloom_form_header' ).addClass( 'et_bloom_with_error' );
 								}
 								if ( data.success && '' == current_container ) {
-									this_form.parent().find( '.et_bloom_success_message' ).addClass( 'et_bloom_animate_message' );
-									this_form.parent().find( '.et_bloom_success_container' ).addClass( 'et_bloom_animate_success' );
-									this_form.remove();
 									set_cookie( 365, 'et_bloom_subscribed_to_' + optin_id + list_id + '=true' );
+
+									if ( '' === success_action || '' === success_action_url ) {
+									  this_form.parent().find( '.et_bloom_success_message' ).addClass( 'et_bloom_animate_message' );
+									  this_form.parent().find( '.et_bloom_success_container' ).addClass( 'et_bloom_animate_success' );
+									  this_form.remove();
+									} else {
+										window.location = success_action_url;
+									}
 
 									// auto close popup if enabled
 									if ( is_popup && $popup_container.hasClass( 'et_bloom_auto_close' ) ) {

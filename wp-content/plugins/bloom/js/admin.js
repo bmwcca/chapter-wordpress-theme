@@ -2,7 +2,9 @@
 	$( document ).ready( function() {
 		var url = window.location.href,
 			tab_link = url.split( '#tab_' )[1],
-			premade_grid_cache = '';
+			premade_grid_cache = '',
+			et_bloom_all_optins_array = $.parseJSON( bloom_settings.all_optins_list ),
+			et_bloom_stats_data = {};
 
 		//Set the current tab to home by default
 		if ( typeof tab_link === 'undefined' ) {
@@ -22,6 +24,32 @@
 
 			if ( 'et_dashboard_tab_content_header_stats' === tab_link ) {
 				refresh_stats_tab( false );
+			}
+		}
+
+		// initiate the stats data updating
+		if ( et_bloom_all_optins_array.length > 0 ) {
+			update_stats_data( et_bloom_all_optins_array[0] );
+		}
+
+		$( 'body' ).on( 'change', '.et_dashboard_select_provider select', function() {
+			// hide/show "Success Action" option depending on selected provider. Custom HTML doesn't support "Success Action".
+			if ( 'custom_html' === $( this ).val() ) {
+				$( '.et_dashboard_tab_content_side_success_action, .et_dashboard_next_success_action' ).addClass( 'et_bloom_hidden_tab' );
+			} else {
+				$( '.et_dashboard_tab_content_side_success_action, .et_dashboard_next_success_action' ).removeClass( 'et_bloom_hidden_tab' );
+			}
+		});
+
+		// redirect to correct page after OAuth
+		if ( -1 !== url.indexOf( '&code=' ) ) {
+			var oauth_redirect_cookie = wpCookies.get( 'et_bloom_redirect_after_oauth' );
+
+			if ( oauth_redirect_cookie ) {
+				wpCookies.remove( 'et_bloom_redirect_after_oauth' );
+
+				// redirect to accounts tab by default
+				window.et_dashboard_set_current_tab( 'et_dashboard_tab_content_header_accounts', 'header' );
 			}
 		}
 
@@ -241,6 +269,13 @@
 			return false;
 		});
 
+		$( 'body' ).on( 'click', '.et_dashboard_next_success_action button', function() {
+			window.et_dashboard_set_current_tab( 'et_dashboard_tab_content_optin_success_action', 'side' );
+			$( 'html, body' ).animate( { scrollTop :  0 }, 400 );
+
+			return false;
+		});
+
 		$( 'body' ).on( 'click', '.et_dashboard_new_optin button', function() {
 			$( '.et_dashboard_optin_select' ).addClass( 'et_dashboard_visible' );
 			$( this ).addClass( 'clicked_button' );
@@ -427,9 +462,9 @@
 				shortcode_type = this_el.data( 'type' );
 
 			if ( 'locked' == shortcode_type ) {
-				shortcode_text = '<textarea disabled="disabled">[et_bloom_locked optin_id="' + optin_id + '"] content [/et_bloom_locked]</textarea>';
+				shortcode_text = '<div class="et_disabled_textarea">[et_bloom_locked optin_id="' + optin_id + '"] content [/et_bloom_locked]</div>';
 			} else {
-				shortcode_text = '<textarea disabled="disabled">[et_bloom_inline optin_id="' + optin_id + '"]</textarea>';
+				shortcode_text = '<div class="et_disabled_textarea">[et_bloom_inline optin_id="' + optin_id + '"]</div>';
 			}
 
 			message_text = '<div class="et_bloom_shortcode_message">' + bloom_settings.shortcode_text + shortcode_text + '</div>';
@@ -479,34 +514,34 @@
 		});
 
 		$( 'body' ).on( 'click', '.authorize_service.clicked_button, .authorize_service.new_account_tab, .et_dashboard_icon_update_lists', function(){
-			var this_el = $( this ),
-				on_form = this_el.hasClass( 'new_account_tab' ) ? false : true,
-				account_name = typeof this_el.data( 'account_name' ) !== 'undefined' ? this_el.data( 'account_name' ) : '',
-				account_exists = this_el.hasClass( 'et_dashboard_icon_update_lists' ) ? true : false;
+			var $this_el = $( this ),
+				on_form = $this_el.hasClass( 'new_account_tab' ) ? false : true,
+				account_name = typeof $this_el.data( 'account_name' ) !== 'undefined' ? $this_el.data( 'account_name' ) : '',
+				account_exists = $this_el.text() === bloom_settings.reauthorize_text;
 
-			authorize_network( this_el.data( 'service' ), this_el.parent(), on_form, account_name, account_exists );
+			authorize_network( $this_el.data( 'service' ), $this_el.parent(), on_form, account_name, account_exists );
 		});
 
 		$( 'body' ).on( 'change', '.et_dashboard_select_provider_new select', function() {
 			var selected = $( this ).val();
-				display_new_account_form( selected );
+			var new_tab;
+
+			if ( 'aweber' === selected ) {
+				// Open a new tab without URL so that it isn't blocked by popup blocker (we'll update the URL after AJAX call)
+				new_tab = window.open('');
+			}
+
+			display_new_account_form( selected, new_tab );
 		});
 
-		$( 'body' ).on( 'click', '.save_account_tab', function(){
-			var fields_container = $( '.et_dashboard_new_account_fields' ),
-				service = $( '.et_dashboard_tab_content_header_edit_account .et_dashboard_select_provider_new select' ).val();
+		$( 'body' ).on( 'click', '.save_account_tab', function() {
+			var fields_container = $( '.et_dashboard_new_account_fields' );
 
-			if ( fields_container.hasClass( 'et_dashboard_edit_account_fields' ) || 'empty' == service ) {
-				save_account_tab( '', '', true );
-			} else {
-				var account_name = fields_container.find( '#name_' + service ).val();
-
-				if ( '' == account_name ) {
-					window.et_dashboard_generate_warning( bloom_settings.no_account_name_text, '#', '', '', '', '' );
-				} else {
-					save_account_tab( service, account_name, false );
-				}
+			if ( ! fields_container.hasClass( 'et_dashboard_edit_account_fields' ) ) {
+				reset_accounts_tab();
 			}
+
+			window.et_dashboard_set_current_tab( 'et_dashboard_tab_content_header_accounts', 'header' );
 
 			return false;
 		});
@@ -909,11 +944,145 @@
 				},
 				success: function( data ){
 					$( '.et_dashboard_home_tab_content' ).replaceWith( data );
+
+					// update stats numbers once we reload the home tab
+					update_stats_numbers();
+
 					try {
 						tinymce.remove();
 					} catch (e) {}
 				}
 			});
+		}
+
+		function update_stats_data( optin_id ) {
+			$.ajax({
+				type: 'POST',
+				dataType: 'json',
+				url: bloom_settings.ajaxurl,
+				data: {
+					action : 'bloom_get_optin_stats',
+					bloom_stats_nonce : bloom_settings.bloom_stats,
+					bloom_stats_optin : optin_id,
+					bloom_stats_last_record : bloom_settings.last_record_date
+				},
+				success: function( data ) {
+					if ( data ) {
+						et_bloom_all_optins_array.splice( et_bloom_all_optins_array.indexOf( optin_id ), 1 );
+
+						// fail silently if no data received
+						if ( ! data ) {
+							return;
+						}
+
+						// initiate request for another optin in a queue
+						if ( et_bloom_all_optins_array.length > 0 ) {
+							update_stats_data( et_bloom_all_optins_array[0] );
+						}
+
+						// cache the retrieved data
+						et_bloom_stats_data[ optin_id ] = data;
+
+						// update stats numbers in table
+						update_stats_numbers();
+
+						// update stats number in "Pick Winner" modal
+						update_split_test_numbers();
+					}
+				}
+			});
+		}
+
+		function get_compact_number( full_number ) {
+			var processedNumber = parseInt( full_number );
+
+			if ( processedNumber >= 1000000 ) {
+				processedNumber = Math.floor( processedNumber / 100000 ) / 10;
+				processedNumber += 'Mil';
+			} else if ( processedNumber > 1000 ) {
+				processedNumber = Math.floor( processedNumber / 100 ) / 10;
+				processedNumber += 'k';
+			}
+
+			return processedNumber;
+		}
+
+		function update_split_test_numbers( $add_spinner ) {
+			var $test_table = $( '.end_test_table' );
+
+			if ( 0 === $test_table.length ) {
+				return;
+			}
+
+			var $all_test_rows = $test_table.find( '.et_dashboard_content_row' );
+
+			// check whether the conversion rate was updated for the test optins. Display spinner if not
+			$all_test_rows.each( function() {
+				var $this_row = $( this );
+				var optin_id = $this_row.data( 'optin_id' );
+
+				// calculate the rate if stats data already exists
+				if ( typeof et_bloom_stats_data[ optin_id ] !== 'undefined' ) {
+					var rate = 0;
+
+					if ( et_bloom_stats_data[ optin_id ].imp > 0 ) {
+						var rate = Math.round( ( ( et_bloom_stats_data[ optin_id ].con * 100 ) / et_bloom_stats_data[ optin_id ].imp ) * 10 ) / 10;
+					}
+					$this_row.find( '.et_test_conversion' ).text( rate + '%' );
+				} else if ( $add_spinner ) {
+					$this_row.find( '.et_test_conversion' ).html( '<span class="spinner et_dashboard_spinner_visible"></span>' );
+				}
+			});
+		}
+
+		function update_stats_numbers() {
+			if ( 0 === et_bloom_stats_data.length ) {
+				return;
+			}
+
+			// go through the stats data in et_bloom_stats_data and update appropriate rows in the table
+			$.each( et_bloom_stats_data, function( optin_id, data ) {
+				var $optin_row = $( '.et_dashboard_optins_item[data-optin_id="' + optin_id + '"]');
+				var $parent_table = $optin_row.closest( '.et_dashboard_optins_list' );
+				var $bottom_row = $parent_table.find( '.et_dashboard_optins_item_bottom_row' );
+
+				$optin_row.find( '>.et_dashboard_table_impressions' ).text( data.imp ).addClass( 'et_dashboard_refreshed' );
+				$optin_row.find( '>.et_dashboard_table_conversions' ).text( data.con ).addClass( 'et_dashboard_refreshed' );
+				$optin_row.find( '>.et_dashboard_table_rate' ).text( data.rate + '%' ).addClass( 'et_dashboard_refreshed' );
+
+				if ( 0 === $bottom_row.length ) {
+					return;
+				}
+
+				// calculate totals for main table and update them as well
+				var $all_rows = $parent_table.find( '.et_dashboard_optins_item' );
+				var total_imp = 0;
+				var total_con = 0;
+				var total_rate = 0;
+
+				$all_rows.each( function() {
+					var $current_row = $( this );
+					var $impression_fields = $current_row.find( '.et_dashboard_table_impressions' );
+					var $conversion_fields = $current_row.find( '.et_dashboard_table_conversions' );
+
+					//row may contain child items, need to check all of them to get the correct number
+					$impression_fields.each( function() {
+						total_imp += parseFloat( $( this ).text() );
+					});
+
+					$conversion_fields.each( function() {
+						total_con += parseFloat( $( this ).text() );
+					});
+				});
+
+				if ( 0 < total_imp ) {
+					total_rate = Math.round( ( ( total_con * 100 ) / total_imp ) * 10 ) / 10;
+				}
+
+				$bottom_row.find( '.et_dashboard_table_impressions' ).text( get_compact_number( total_imp ) );
+				$bottom_row.find( '.et_dashboard_table_conversions' ).text( get_compact_number( total_con ) );
+				$bottom_row.find( '.et_dashboard_table_rate' ).text( total_rate + '%' );
+			} );
 		}
 
 		function reset_accounts_tab() {
@@ -1006,6 +1175,11 @@
 			}
 
 			window.et_dashboard_set_current_tab( 'et_dashboard_tab_content_optin_setup', 'side' );
+
+			// hide "Success Action" option if Custom HTML selected as provider
+			if ( 0 !== $( '.et_dashboard_select_provider select' ).length && 'custom_html' === $( '.et_dashboard_select_provider select' ).val() ) {
+				$( '.et_dashboard_tab_content_side_success_action, .et_dashboard_next_success_action' ).addClass( 'et_bloom_hidden_tab' );
+			}
 		}
 
 		function clear_account_confirmation() {
@@ -1019,11 +1193,13 @@
 				username_field = $( $container ).find( '#username_' + $service ),
 				client_field = $( $container ).find( '#client_id_' + $service ),
 				organization_field = $( $container ).find( '#organization_id_' + $service ),
+				login_url = $( $container ).find( '#login_url_' + $service ),
 				password_field = $( $container ).find( '#password_' + $service ),
 				account_name = $( $container ).find( '#name_' + $service ),
-				account_name_val = '' == $account_name ? $( $container ).find( '#name_' + $service ).val() : $account_name,
+				account_name_val = '' === $account_name ? $( $container ).find( '#name_' + $service ).val() : $account_name,
 				$provider_fields = $( $container ).find( '.provider_field_' + $service ),
-				provider_fields_invalid = false;
+				provider_fields_invalid = false,
+				authorization_from_optin = 0 !== $( '.current_tab_et_dashboard_tab_content_optin_setup' ).length;
 
 			$( $container ).find( 'input' ).css( { 'border' : 'none' } );
 
@@ -1074,6 +1250,7 @@
 					bloom_client_id : client_field.val(),
 					bloom_password : password_field.val(),
 					bloom_organization_id : organization_field.val(),
+					bloom_login_url : login_url.val(),
 					bloom_account_exists : $account_exists
 				};
 
@@ -1084,16 +1261,33 @@
 
 				$.ajax({
 					type: 'POST',
+					dataType: 'json',
 					url: bloom_settings.ajaxurl,
 					data: ajax_data,
 					beforeSend: function( data ) {
 						$( $container ).find( 'span.spinner' ).addClass( 'et_dashboard_spinner_visible' );
 					},
 
-					success: function( data ){
+					success: function( data ) {
+						if ( typeof data !== 'undefined' && typeof data.redirect_url !== 'undefined' ) {
+							// redirect to authorization URL to finish OAuth 2 authorization
+							// save current optin if authorization initiated from optin editing screen
+							if ( $( '.current_tab_et_dashboard_tab_content_optin_setup' ).length ) {
+								bloom_dashboard_save( $( '.et_dashboard_save_changes button' ), 'silent', data.redirect_url );
+
+								var redirect_to_optin = $( '.et_dashboard_save_changes button' ).data( 'subtitle' );
+								wpCookies.set( 'et_bloom_redirect_after_oauth', redirect_to_optin );
+								return;
+							}
+
+							wpCookies.set( 'et_bloom_redirect_after_oauth', 'true' );
+							window.location.href = data.redirect_url;
+							return;
+						}
+
 						$( $container ).find( 'span.spinner' ).removeClass( 'et_dashboard_spinner_visible' );
 
-						if ( 'success' == data || '' == data ) {
+						if ( 'success' === data || '' === data || typeof data.message !== 'undefined' ) {
 							reset_accounts_tab();
 
 							if ( true === $on_form ) {
@@ -1105,6 +1299,16 @@
 								$( '.authorize_service.new_account_tab' ).text( bloom_settings.reauthorize_text );
 								append_lists( $service, account_name_val );
 							}
+
+							// do not output success messages when authorizing from optin settings
+							if ( typeof data.message !== 'undefined' && ! authorization_from_optin ) {
+								window.et_dashboard_generate_warning( data.message, '#', '', '', '', '' );
+							}
+
+							if ( typeof data.next_action !== 'undefined' ) {
+								// run the function if need to
+								et_bloom_finish_authorization_action( data.next_action, data.service, data.name );
+							}
 						} else {
 							window.et_dashboard_generate_warning( data, '#', '', '', '', '' );
 						}
@@ -1113,6 +1317,19 @@
 			}
 
 			return false;
+		}
+
+		function et_bloom_finish_authorization_action( action_name, service, name ) {
+			$.ajax({
+				type: 'POST',
+				url: bloom_settings.ajaxurl,
+				data: {
+					action : action_name,
+					get_lists_nonce : bloom_settings.get_lists,
+					bloom_service : service,
+					bloom_name : name
+				}
+			});
 		}
 
 		function append_lists( $service, $name ){
@@ -1193,20 +1410,24 @@
 			});
 		}
 
-		function display_new_account_form( $service ) {
+		function display_new_account_form( service, new_tab ) {
 			$.ajax({
 				type: 'POST',
 				url: bloom_settings.ajaxurl,
 				data: {
 					action : 'bloom_generate_new_account_fields',
 					accounts_tab_nonce : bloom_settings.accounts_tab,
-					bloom_service : $service
+					bloom_service : service
 				},
 				success: function( data ){
 					$( 'ul.et_dashboard_new_account_fields' ).replaceWith( function() {
 							return $( data ).hide().fadeIn();
 						} );
 					$( '.account_settings_fields' ).addClass( 'et_visible_settings' );
+
+					if ( 'aweber' === service ) {
+						new_tab.location = 'https://auth.aweber.com/1.0/oauth/authorize_app/e233dabd';
+					}
 				}
 			});
 		}
@@ -1229,27 +1450,6 @@
 					} );
 				}
 			});
-		}
-
-		function save_account_tab( $service, $account_name, $force_exit ) {
-			if ( true == $force_exit ) {
-				window.et_dashboard_set_current_tab( 'et_dashboard_tab_content_header_accounts', 'header' );
-			} else {
-				$.ajax({
-					type: 'POST',
-					url: bloom_settings.ajaxurl,
-					data: {
-						action : 'bloom_save_account_tab',
-						accounts_tab_nonce : bloom_settings.accounts_tab,
-						bloom_service : $service,
-						bloom_account_name : $account_name
-					},
-					success: function( data ){
-						reset_accounts_tab();
-						window.et_dashboard_set_current_tab( 'et_dashboard_tab_content_header_accounts', 'header' );
-					}
-				});
-			}
 		}
 
 		function save_updates_tab( username, api_key, $spinner ) {
@@ -1307,6 +1507,8 @@
 
 					if ( 'end' == $action ) {
 						$( '#wpwrap' ).append( data );
+
+						update_split_test_numbers( true );
 					}
 				}
 			});
@@ -1322,7 +1524,7 @@
 			}
 		}
 
-		function bloom_dashboard_save( $button ) {
+		function bloom_dashboard_save( $button, silent_save, redirect_to ) {
 			tinyMCE.triggerSave();
 			var options_fromform = $( '.' + dashboardSettings.plugin_class + ' #et_dashboard_options' ).serialize();
 			$spinner = $button.parent().find( '.spinner' );
@@ -1341,6 +1543,16 @@
 				},
 				success: function( data ) {
 					$spinner.removeClass( 'et_dashboard_spinner_visible' );
+
+					// display no warnings in case of silent save
+					if ( 'silent' === silent_save ) {
+						if ( 'undefined' !== typeof redirect_to ) {
+							window.location.href = redirect_to;
+						}
+
+						return;
+					}
+
 					window.et_dashboard_display_warning( data );
 					window.et_dashboard_set_current_tab( 'et_dashboard_tab_content_header_home', 'header' );
 					$( '#et_dashboard_wrapper' ).removeClass( 'et_dashboard_visible_nav' );

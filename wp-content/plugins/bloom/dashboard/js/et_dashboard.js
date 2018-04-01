@@ -128,10 +128,12 @@
 		var all_triggers = $current_trigger.data( "enables" ).split( '#' ),
 			option_value = '';
 
-		if ( 0 < $current_trigger.find( 'select' ).length )  {
-			option_value = $current_trigger.find( 'select' ).val();
-		} else {
-			option_value = true == $current_trigger.children( 'input' ).prop( 'checked' ) ? 'true' : 'false';
+		if ( ! $current_trigger.hasClass( 'et_dashboard_hidden_option' ) ) {
+			if ( 0 < $current_trigger.find( 'select' ).length )  {
+				option_value = $current_trigger.find( 'select' ).val();
+			} else {
+				option_value = true == $current_trigger.children( 'input' ).prop( 'checked' ) ? 'true' : 'false';
+			}
 		}
 
 		$.each( all_triggers, function( index, option_name ){

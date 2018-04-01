@@ -33,6 +33,8 @@ if(is_admin()) {
     add_filter( 'adverts_css_classes', 'adext_adverts_css_classes', 10, 2 );
     add_filter( 'adverts_payments_features', 'adext_featured_payment' );
     add_action( 'adverts_sh_manage_list_status', 'adext_featured_manage_list_status' );
+    add_filter( 'shortcode_atts_adverts_list', 'adext_featured_adverts_list_params', 10, 3 );
+    add_filter( 'adverts_list_query', 'adext_featured_adverts_list_query', 10, 2 );
 }
 
 add_filter("adverts_payments_order_create", "adext_featured_order_create");
@@ -306,4 +308,59 @@ function adext_featured_manage_list_status( $post ) {
     ?>
     <span class="adverts-inline-icon adverts-inline-icon-info adverts-icon-flag" title="<?php _e("Featured", "adverts") ?>"></span>
     <?php 
+}
+
+/**
+ * Adds list_type param to shortcode
+ * 
+ * The param is being registered using shortcode_atts_adverts_list filter.
+ * 
+ * @since 1.2.1
+ * @param array  $out       Parsed shortcode params
+ * @param array  $pairs     Entire list of supported attributes and their defaults.
+ * @param array  $atts      User defined attributes in shortcode tag.
+ * @return int
+ */
+function adext_featured_adverts_list_params( $out, $pairs, $atts ) {
+    if( ! isset( $atts["list_type"] ) ) {
+        $atts["list_type"] = "all";
+    }
+    
+    $out["list_type"] = $atts["list_type"];
+    return $out;
+}
+
+/**
+ * Modifies [adverts_list] WP_Query arguments
+ * 
+ * This function handles:
+ * - featured_only param in [adverts_list] shortcode
+ * - sorting by is_featured flag first
+ * 
+ * @since 1.2.1
+ * @param array     $args       WP_Query arguments
+ * @param array     $params     [adverts_list] shortcode params 
+ * @return array                Updated list of WP_Query arguments
+ */
+function adext_featured_adverts_list_query( $args, $params = array() ) {
+    
+    if( isset( $params["list_type"] ) ) {
+        switch( $params["list_type"] ) {
+            case "featured":
+                $args["menu_order"] = 1;
+                break;
+            case "normal":
+                $args["menu_order"] = 0;
+                break;
+            default:
+                // do nothing
+                break;
+        }
+    }
+    
+    if( isset( $args["orderby"] ) && is_array( $args["orderby"] ) ) {
+        $args["orderby"] = array_merge( array( 'menu_order'=>'DESC' ), $args["orderby"] );
+    }
+    
+    return $args;
 }

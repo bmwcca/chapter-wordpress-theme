@@ -1,6 +1,6 @@
 <?php adverts_flash( $adverts_flash ) ?>
 
-<form action="" method="post" class="adverts-form adverts-form-aligned">
+<form action="" method="post" class="adverts-form <?php echo $form->get_layout() ?>">
     <fieldset>
         
         <?php foreach($form->get_fields( array( "type" => array( "adverts_field_hidden" ) ) ) as $field): ?>
@@ -22,7 +22,7 @@
             
             <label for="<?php echo esc_attr($field["name"]) ?>">
                 <?php echo esc_html($field["label"]) ?>
-                <?php if(adverts_field_has_validator($field, "is_required")): ?>
+                <?php if(adverts_field_is_required($field)): ?>
                 <span class="adverts-form-required">*</span>
                 <?php endif; ?>
             </label>

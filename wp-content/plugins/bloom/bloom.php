@@ -2,7 +2,7 @@
 /*
  * Plugin Name: Bloom
  * Plugin URI: http://www.elegantthemes.com/plugins/bloom/
- * Version: 1.1.7
+ * Version: 1.2.23
  * Description: A simple, comprehensive and beautifully constructed email opt-in plugin built to help you quickly grow your mailing list.
  * Author: Elegant Themes
  * Author URI: http://www.elegantthemes.com
@@ -21,15 +21,22 @@ if ( ! class_exists( 'ET_Dashboard' ) ) {
 }
 
 class ET_Bloom extends ET_Dashboard {
-	var $plugin_version = '1.1.7';
-	var $db_version = '1.0';
+	var $plugin_version = '1.2.23';
+	var $db_version = '1.1';
 	var $_options_pagename = 'et_bloom_options';
 	var $menu_page;
 	var $protocol;
 
+	private $options_version = 1;
+
 	private static $_this;
 
 	public static $scripts_enqueued = false;
+
+	/**
+	 * @var \ET_Core_API_Email_Providers
+	 */
+	public $providers;
 
 	function __construct() {
 		// Don't allow more than one instance of the class
@@ -42,6 +49,7 @@ class ET_Bloom extends ET_Dashboard {
 		self::$_this = $this;
 
 		$this->protocol = is_ssl() ? 'https' : 'http';
+		$this->providers = null;
 
 		add_action( 'admin_menu', array( $this, 'add_menu_link' ) );
 
@@ -62,8 +70,7 @@ class ET_Bloom extends ET_Dashboard {
 		$plugin_file = plugin_basename( __FILE__ );
 		add_filter( "plugin_action_links_{$plugin_file}", array( $this, 'add_settings_link' ) );
 
-		// construct dashboard at the plugins_loaded hook, to make sure localization applied correctly.
-		add_action( 'plugins_loaded', array( $this, 'construct_dashboard' ), 99 );
+		add_action( 'after_setup_theme', array( $this, 'construct_dashboard' ), 11 );
 
 		// Register save settings function for ajax request
 		add_action( 'wp_ajax_et_bloom_save_settings', array( $this, 'bloom_save_settings' ) );
@@ -86,6 +93,8 @@ class ET_Bloom extends ET_Dashboard {
 
 		add_action( 'wp_ajax_bloom_authorize_account', array( $this, 'authorize_account' ) );
 
+		add_action( 'wp_ajax_bloom_retrieve_counts', array( $this, 'et_bloom_retrieve_counts' ) );
+
 		add_action( 'wp_ajax_bloom_reset_accounts_table', array( $this, 'reset_accounts_table' ) );
 
 		add_action( 'wp_ajax_bloom_generate_mailing_lists', array( $this, 'generate_mailing_lists' ) );
@@ -97,8 +106,6 @@ class ET_Bloom extends ET_Dashboard {
 		add_action( 'wp_ajax_bloom_generate_current_lists', array( $this, 'generate_current_lists' ) );
 
 		add_action( 'wp_ajax_bloom_generate_edit_account_page', array( $this, 'generate_edit_account_page' ) );
-
-		add_action( 'wp_ajax_bloom_save_account_tab', array( $this, 'save_account_tab' ) );
 
 		add_action( 'wp_ajax_bloom_save_updates_tab', array( $this, 'save_updates_tab' ) );
 
@@ -113,6 +120,8 @@ class ET_Bloom extends ET_Dashboard {
 		add_action( 'wp_ajax_bloom_pick_winner_optin', array( $this, 'pick_winner_optin' ) );
 
 		add_action( 'wp_ajax_bloom_clear_stats', array( $this, 'clear_stats' ) );
+
+		add_action( 'wp_ajax_bloom_get_optin_stats', array( $this, 'get_optin_stats' ) );
 
 		add_action( 'wp_ajax_bloom_get_premade_values', array( $this, 'get_premade_values' ) );
 		add_action( 'wp_ajax_bloom_generate_premade_grid', array( $this, 'generate_premade_grid' ) );
@@ -148,8 +157,9 @@ class ET_Bloom extends ET_Dashboard {
 			add_action( "admin_head-$hook", array( $this, 'add_mce_button_filters' ) );
 		}
 
-		// Plugins Updates system should be loaded before a theme core loads
-		$this->add_updates();
+		$this->maybe_load_core();
+		$this->maybe_update_options_schema();
+		et_core_enable_automatic_updates( ET_BLOOM_PLUGIN_URI, $this->plugin_version );
 	}
 
 	function construct_dashboard() {
@@ -165,10 +175,13 @@ class ET_Bloom extends ET_Dashboard {
 		parent::__construct( $dashboard_args );
 	}
 
-	function add_updates() {
-		require_once( ET_BLOOM_PLUGIN_DIR . 'core/updates_init.php' );
+	public function maybe_load_core() {
+		if ( ! defined( 'ET_CORE' ) ) {
+			require_once ET_BLOOM_PLUGIN_DIR . 'core/init.php';
+			et_core_setup();
+		}
 
-		et_core_enable_automatic_updates( ET_BLOOM_PLUGIN_URI, $this->plugin_version );
+		$this->providers = new ET_Core_API_Email_Providers( 'bloom' );
 	}
 
 	static function activate_plugin() {
@@ -185,6 +198,25 @@ class ET_Bloom extends ET_Dashboard {
 		// remove lists auto updates from wp cron if plugin deactivated
 		wp_clear_scheduled_hook( 'bloom_lists_auto_refresh' );
 		wp_clear_scheduled_hook( 'bloom_stats_auto_refresh' );
+	}
+
+	function get_all_optins_list() {
+		$options_array = ET_Bloom::get_bloom_options();
+		$optins_array = array();
+
+		foreach( $options_array as $optin_id => $details ) {
+			if ( false !== strpos( $optin_id, 'optin_' ) ) {
+				if ( isset( $details['optin_status'] ) && 'active' === $details['optin_status'] ) {
+					// add active optins to the beginning of array
+					array_unshift( $optins_array, $optin_id );
+				} else {
+					// add inactive optins to the end of array
+					$optins_array[] = $optin_id;
+				}
+			}
+		}
+
+		return $optins_array;
 	}
 
 	function define_page_name() {
@@ -253,6 +285,179 @@ class ET_Bloom extends ET_Dashboard {
 	}
 
 	/**
+	 * Perform the request to Bloom Stats table and return the results
+	 * $sql - Query string ( required )
+	 * $type - type of the query ( optional )
+	 * $args - list of args ( optional )
+	 *
+	 * @return string
+	 */
+	function perform_stats_sql_request( $sql, $type = 'get_results', $args = array() ) {
+		global $wpdb;
+
+		$table_name = $wpdb->prefix . 'et_bloom_stats';
+
+		if ( $wpdb->get_var( "SHOW TABLES LIKE '$table_name'" ) !== $table_name ) {
+			return false;
+		}
+
+		// replace the table name placeholder with actual table name
+		$sql = str_replace( '__table_name__', $table_name, $sql );
+
+		if ( ! empty( $args ) ) {
+			$query_string = $wpdb->prepare( $sql, $args );
+		} else {
+			$query_string = $sql;
+		}
+
+		switch( $type ) {
+			case 'get_results' :
+				return $wpdb->get_results( $query_string, ARRAY_A );
+				break;
+			case 'query' :
+				return $wpdb->query( $query_string );
+				break;
+		}
+	}
+
+	/**
+	 * Retrieve the last record date from stats table
+	 *
+	 * @return string
+	 */
+	function get_last_record_date() {
+		// get 1st record from the stats table ordered by record_date descending
+		$last_record_date_sql = "SELECT record_date from __table_name__ ORDER BY record_date DESC LIMIT 1";
+
+		$last_record_date_raw = $this->perform_stats_sql_request( $last_record_date_sql );
+
+		// get the record date if table is not empty. Fallback to current_time otherwise
+		$last_stats_record_date = ! empty( $last_record_date_raw ) && isset( $last_record_date_raw[0]['record_date'] ) ? $last_record_date_raw[0]['record_date'] : current_time( 'mysql' );
+
+		return $last_stats_record_date;
+	}
+
+	/**
+	 * Update the stats data for each optin in cache if needed
+	 *
+	 * @return void
+	 */
+	function refresh_all_optins_stats() {
+		$all_optins = $this->get_all_optins_list();
+
+		if ( empty( $all_optins ) ) {
+			return;
+		}
+
+		$last_record_date = $this->get_last_record_date();
+
+		foreach( $all_optins as $index => $optin_id ) {
+			$this->get_stats_data( $optin_id, $last_record_date );
+		}
+	}
+
+	/**
+	 * Retrieve the stats data for specified optin for ajax request
+	 *
+	 * @return json string
+	 */
+	function get_optin_stats() {
+		if ( ! wp_verify_nonce( $_POST['bloom_stats_nonce'] , 'bloom_stats' ) ) {
+			die( -1 );
+		}
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			die( -1 );
+		}
+
+		$optin_id = ! empty( $_POST['bloom_stats_optin'] ) ? sanitize_text_field( $_POST['bloom_stats_optin'] ) : '';
+		$last_record_date = ! empty( $_POST['bloom_stats_last_record'] ) ? sanitize_text_field( $_POST['bloom_stats_last_record'] ) : '';
+		$stats_cache = get_option( 'et_bloom_stats_optin_cache', array() );
+		$stats_data = array();
+
+		$stats_data = $this->get_stats_data( $optin_id, $last_record_date );
+
+		// calculate the conversion rate and add it to the stats data array
+		$stats_data['rate'] = ! empty( $stats_data ) && isset( $stats_data['con'] ) && isset( $stats_data['imp'] ) ? $this->conversion_rate( '', $stats_data['con'], $stats_data['imp'] ) : 0;
+
+		die( json_encode( $stats_data ) );
+	}
+
+	/**
+	 * Retrieve the stats data for specified optin either from cache or from Database
+	 *
+	 * @return array
+	 */
+	function get_stats_data( $optin_id = '', $last_record_date = '' ) {
+		if ( '' === $optin_id ) {
+			return array();
+		}
+
+		$stats_cache = get_option( 'et_bloom_stats_optin_cache', array() );
+
+		$last_record_date = '' === $last_record_date ? current_time( 'mysql' ) : $last_record_date;
+
+		$last_cache_update = isset( $stats_cache['optins_cache'] ) && isset( $stats_cache['optins_cache'][$optin_id] ) ? $stats_cache['optins_cache'][ $optin_id ]['last_updated'] : false;
+
+		// return data from cache if it contains actual data. Update cache otherwise
+		if ( $last_cache_update && strtotime( $last_cache_update ) >= strtotime( $last_record_date ) ) {
+			return $stats_cache['optins_cache'][$optin_id];
+		}
+
+		$update_time = current_time( 'mysql' );
+		$sql = "SELECT id";
+		$sql_args = array();
+
+		// prepare sql request to retrieve the impressions/conversions for specified optin
+		$sql .= ",sum(case when record_type ='imp' AND optin_id = %s then 1 else 0 end) %s,
+				sum(case when record_type ='con' AND optin_id = %s then 1 else 0 end) %s";
+
+		$sql_args[] = sanitize_text_field( $optin_id );
+		$sql_args[] = sanitize_text_field( $optin_id ) . '_imp';
+		$sql_args[] = sanitize_text_field( $optin_id );
+		$sql_args[] = sanitize_text_field( $optin_id ) . '_con';
+
+		$sql .= " FROM __table_name__";
+
+		// limit the sql query by date to speed up the request to DB if cache exists for current optin
+		if ( $last_cache_update ) {
+			$sql .= " WHERE record_date > %s ORDER BY record_date";
+			$sql_args[] = sanitize_text_field( $last_cache_update );
+		}
+
+		$stats_data = $this->perform_stats_sql_request( $sql, 'get_results', $sql_args );
+
+		if ( ! empty( $stats_data ) ) {
+			$stats_data_array = $stats_data[0];
+
+			if ( ! isset( $stats_cache['optins_cache'] ) ) {
+				$stats_cache['optins_cache'] = array();
+			}
+
+			// update the stats data array if correct data retrieved
+			if ( isset( $stats_data_array[$optin_id . '_con'] ) && isset( $stats_data_array[$optin_id . '_imp'] ) ) {
+				$retrieved_imp = (int) $stats_data_array[$optin_id . '_imp'];
+				$retrieved_con = (int) $stats_data_array[$optin_id . '_con'];
+
+				// Increment the numbers if cache exists. Save the retrieved numbers otherwise
+				$stats_cache['optins_cache'][$optin_id] = array(
+					'imp' => isset( $stats_cache['optins_cache'][$optin_id]['imp'] ) ? $stats_cache['optins_cache'][$optin_id]['imp'] + $retrieved_imp : $retrieved_imp,
+					'con' => isset( $stats_cache['optins_cache'][$optin_id]['con'] ) ? $stats_cache['optins_cache'][$optin_id]['con'] + $retrieved_con : $retrieved_con,
+				);
+			}
+
+			$stats_cache['optins_cache'][ $optin_id ]['last_updated'] = $update_time;
+
+			// update the cache which stored as option
+			update_option( 'et_bloom_stats_optin_cache', $stats_cache );
+
+			return $stats_cache['optins_cache'][ $optin_id ];
+		}
+
+		return array();
+	}
+
+	/**
 	 *
 	 * Adds the "Next" button into the Bloom dashboard via ET_Dashboard action.
 	 * @return prints the data on screen
@@ -278,6 +483,13 @@ class ET_Bloom extends ET_Dashboard {
 				<button class="et_dashboard_icon" data-selected_layout="layout_1">%1$s</button>
 			</div>',
 			esc_html__( 'Next: Customize', 'bloom' )
+		);
+
+		printf( '
+			<div class="et_dashboard_row et_dashboard_next_success_action">
+				<button class="et_dashboard_icon">%1$s</button>
+			</div>',
+			esc_html__( 'Next: Success Action', 'bloom' )
 		);
 
 		printf( '
@@ -317,6 +529,11 @@ class ET_Bloom extends ET_Dashboard {
 		$new_id = $this->generate_optin_id( false );
 
 		foreach ( $options_array as $key => $value ) {
+			// Valid option is always array. Skip the wrong values
+			if ( ! isset( $options_array[$key] ) || ! is_array( $options_array[$key] ) ) {
+				continue;
+			}
+
 			$updated_array['optin_' . $new_id] = $options_array[$key];
 
 			//reset accounts settings and make all new optins inactive
@@ -431,7 +648,7 @@ class ET_Bloom extends ET_Dashboard {
 		}
 
 		$sql = "CREATE TABLE $table_name (
-			id mediumint(9) NOT NULL AUTO_INCREMENT,
+			id int NOT NULL AUTO_INCREMENT,
 			record_date datetime DEFAULT '0000-00-00 00:00:00' NOT NULL,
 			record_type varchar(3) NOT NULL,
 			optin_id varchar(20) NOT NULL,
@@ -452,7 +669,17 @@ class ET_Bloom extends ET_Dashboard {
 	 * @return void
 	 */
 	function maybe_set_db_version() {
-		if ( 'true' !== get_option( 'bloom_is_just_activated' ) ) {
+		$options_array = ET_Bloom::get_bloom_options();
+		$need_version_update = false;
+
+		if ( isset( $options_array['db_version'] ) && version_compare( $options_array['db_version'], '1.1', '<' ) ) {
+			// DB fields were updated in 1.1, so run db_install() for old versions of plugin.
+			// type of "id" field was changed from 'mediumint' to 'int'
+			$this->db_install();
+			$need_version_update = true;
+		}
+
+		if ( 'true' !== get_option( 'bloom_is_just_activated' ) && ! $need_version_update ) {
 			return;
 		}
 
@@ -712,11 +939,9 @@ class ET_Bloom extends ET_Dashboard {
 	 * Generates output for the Stats tab
 	 */
 	function generate_stats_tab() {
-		if ( ! current_user_can( 'manage_options' ) ) {
-			die( -1 );
-		}
+		et_core_security_check( 'manage_options' );
 
-		$options_array = ET_Bloom::get_bloom_options();
+		$all_accounts = $this->_get_accounts();
 
 		$output = sprintf( '
 			<div class="et_dashboard_stats_contents et_dashboard_stats_ready">
@@ -748,7 +973,7 @@ class ET_Bloom extends ET_Dashboard {
 			esc_html__( 'Overview', 'bloom' ),
 			$this->generate_all_time_stats(),
 			$this->generate_optins_stats_table( 'conversion_rate', true ),
-			( ! empty( $options_array['accounts'] ) )
+			( ! empty( $all_accounts ) )
 				? sprintf(
 					'<div class="et_dashboard_optins_list">
 						%1$s
@@ -785,6 +1010,7 @@ class ET_Bloom extends ET_Dashboard {
 		if ( get_option( 'et_bloom_stats_cache' ) && 'true' !== $force_update ) {
 			$output = get_option( 'et_bloom_stats_cache' );
 		} else {
+			$this->refresh_all_optins_stats();
 			$output = $this->generate_stats_tab();
 			update_option( 'et_bloom_stats_cache', $output );
 		}
@@ -797,10 +1023,39 @@ class ET_Bloom extends ET_Dashboard {
 	}
 
 	/**
+	 * Reset all opt-ins currently configured for provider account (make them inactive).
+	 *
+	 * @param string $provider
+	 * @param string $account
+	 */
+	public function reset_optins_for_provider_account( $provider, $account ) {
+		$options_array = self::get_bloom_options();
+
+		foreach ( $options_array as $optin_id => $details ) {
+			if ( 'accounts' === $optin_id || ! isset( $details['account_name'], $details['email_provider'] ) ) {
+				continue;
+			}
+
+			if ( $account === $details['account_name'] && $provider === $details['email_provider'] ) {
+				$options_array[ $optin_id ]['email_provider'] = 'empty';
+				$options_array[ $optin_id ]['account_name'] = 'empty';
+				$options_array[ $optin_id ]['email_list'] = 'empty';
+				$options_array[ $optin_id ]['optin_status'] = 'inactive';
+			}
+		}
+
+		ET_Bloom::update_option( $options_array );
+	}
+
+	/**
 	 * Update Stats and save it into WP DB
 	 * @return void
 	 */
 	function perform_stats_refresh() {
+
+		// remove all cached values
+		update_option( 'et_bloom_stats_optin_cache', array() );
+
 		$fresh_stats = $output = $this->generate_stats_tab();
 		update_option( 'et_bloom_stats_cache', $fresh_stats );
 	}
@@ -818,14 +1073,13 @@ class ET_Bloom extends ET_Dashboard {
 			die( -1 );
 		}
 
-		global $wpdb;
+		// remove everything from the stats table
+		$sql = "TRUNCATE TABLE __table_name__";
 
-		$table_name = $wpdb->prefix . 'et_bloom_stats';
+		$this->perform_stats_sql_request( $sql, 'query' );
 
-		// construct sql query to mark removed options as removed in stats DB
-		$sql = "TRUNCATE TABLE $table_name";
-
-		$wpdb->query( $sql );
+		//clear optins stats cache
+		delete_option( 'et_bloom_stats_optin_cache' );
 	}
 
 	/**
@@ -833,20 +1087,18 @@ class ET_Bloom extends ET_Dashboard {
 	 * @return string
 	 */
 	function generate_all_lists_select() {
-		$options_array = ET_Bloom::get_bloom_options();
+		$all_accounts = $this->_get_accounts();
 		$output = sprintf( '<option value="all">%1$s</option>', esc_html__( 'All lists', 'bloom' ) );
 
-		if ( ! empty( $options_array['accounts'] ) ) {
-			foreach ( $options_array['accounts'] as $service => $accounts ) {
-				foreach ( $accounts as $name => $details ) {
-					if ( ! empty( $details['lists'] ) ) {
-						foreach ( $details['lists'] as $id => $list_data ) {
-							$output .= sprintf(
-								'<option value="%2$s">%1$s</option>',
-								esc_html( $service . ' - ' . $list_data['name'] ),
-								esc_attr( $service . '_' . $id )
-							);
-						}
+		foreach ( $all_accounts as $service => $accounts ) {
+			foreach ( $accounts as $name => $details ) {
+				if ( ! empty( $details['lists'] ) ) {
+					foreach ( $details['lists'] as $id => $list_data ) {
+						$output .= sprintf(
+							'<option value="%2$s">%1$s</option>',
+							esc_html( $service . ' - ' . $list_data['name'] ),
+							esc_attr( $service . '_' . $id )
+						);
 					}
 				}
 			}
@@ -896,13 +1148,82 @@ class ET_Bloom extends ET_Dashboard {
 	}
 
 	/**
+	 * Returns the data for a specific service provider account.
+	 *
+	 * @param string $service The service provider's slug.
+	 * @param string $name    The account name.
+	 *
+	 * @return array
+	 */
+	private function _get_account( $service, $name ) {
+		$accounts = $this->_get_accounts( $service );
+
+		return isset( $accounts[ $name ] ) ? $accounts[ $name ] : array();
+	}
+
+	/**
+	 * Returns the accounts for a service or all accounts if `$service` is empty.
+	 *
+	 * @param string $service The service for which to retrieve accounts. Optional.
+	 *
+	 * @return array
+	 */
+	private function _get_accounts( $service = '' ) {
+		$accounts = $this->providers->accounts();
+
+		if ( '' !== $service ) {
+			$accounts = isset( $accounts[ $service ] ) ? $accounts[ $service ] : array();
+		}
+
+		return $accounts;
+	}
+
+	/**
+	 * Returns an {@link \ET_Core_API_Email_Provider} instance for a service provider account.
+	 *
+	 * @param string $provider_slug The service provider slug.
+	 * @param string $account_name  The account name.
+	 *
+	 * @return \ET_Core_API_Email_Provider|bool
+	 */
+	private function _get_provider( $provider_slug, $account_name ) {
+		return $this->providers->get( $provider_slug, $account_name, 'bloom' );
+	}
+
+	public function maybe_update_options_schema() {
+		$options         = self::get_bloom_options();
+		$current_version = isset( $options['schema_version'] ) ? (int) $options['schema_version'] : 0;
+
+		if ( $this->options_version === $current_version ) {
+			return;
+		}
+
+		if ( 0 === $current_version &&  1 === $this->options_version ) {
+			// Core API Wrappers Implemented. Copy accounts data to core.
+			$core_options              = (array) get_option( 'et_core_api_email_options' );
+			$core_options['accounts']  = isset( $core_options['accounts'] ) ? $core_options['accounts'] : array();
+			$options['schema_version'] = $this->options_version;
+
+			if ( isset( $options['accounts'] ) ) {
+				$core_options['accounts']  = array_merge( $core_options['accounts'], $options['accounts'] );
+
+				// Make sure the BB clears its template cache
+				if ( function_exists( 'et_pb_force_regenerate_templates' ) ) {
+					et_pb_force_regenerate_templates();
+				}
+			}
+
+			ET_Bloom::update_bloom_options( $options );
+			update_option( 'et_core_api_email_options', $core_options );
+		}
+	}
+
+	/**
 	 * Generates the stats table with optins
 	 * @return string
 	 */
 	function generate_optins_stats_table( $orderby = 'conversion_rate', $include_header = false ) {
-		if ( ! current_user_can( 'manage_options' ) ) {
-			die( -1 );
-		}
+		et_core_security_check( 'manage_options' );
 
 		$options_array = ET_Bloom::get_bloom_options();
 		$optins_count = 0;
@@ -955,7 +1276,7 @@ class ET_Bloom extends ET_Dashboard {
 			$sorted_optins = $this->sort_array( $unsorted_optins, $orderby );
 
 			foreach ( $sorted_optins as $id => $details ) {
-				if ( '' !== $details['child_of'] ) {
+				if ( ! empty( $details['child_of'] ) ) {
 					$status = $options_array[$details['child_of']]['optin_status'];
 				} else {
 					$status = $details['status'];
@@ -1020,127 +1341,110 @@ class ET_Bloom extends ET_Dashboard {
 	 * @return string
 	 */
 	function generate_pages_stats() {
-		$all_pages_id = $this->get_all_stats_pages();
-		$con_by_pages = array();
+		$pages_with_optins = $this->get_all_pages_with_optins();
 		$output = '';
 
-		if ( empty( $all_pages_id ) ) {
+		if ( empty( $pages_with_optins ) ) {
 			return;
 		}
 
-		foreach( $all_pages_id as $page ) {
-			$con_by_pages[$page['page_id']] = $this->get_unique_optins_by_page( $page['page_id'] );
+		$rate_by_pages = $this->get_pages_conversion_rate( $pages_with_optins );
+
+		$i = 0;
+
+		foreach ( $rate_by_pages as $page_id => $rate ) {
+			$page_rate = 0;
+			$rates_count = 0;
+			$optins_data = array();
+			$j = 0;
+
+			foreach ( $rate as $current_optin ) {
+				foreach ( $current_optin as $optin_id => $current_rate ) {
+					$page_rate = $page_rate + $current_rate;
+					$rates_count++;
+
+					$optins_data[$j] = array(
+						'optin_id' => $optin_id,
+						'optin_rate' => $current_rate,
+					);
+
+				}
+				$j++;
+			}
+
+			$average_rate = 0 != $rates_count ? round( $page_rate / $rates_count, 1 ) : 0;
+			$rate_by_pages_unsorted[$i]['page_id'] = $page_id;
+			$rate_by_pages_unsorted[$i]['page_rate'] = $average_rate;
+			$rate_by_pages_unsorted[$i]['optins_data'] = $this->sort_array( $optins_data, 'optin_rate', $order = SORT_DESC );
+
+			$i++;
 		}
 
-		if ( ! empty( $con_by_pages ) ) {
-			foreach ( $con_by_pages as $page_id => $optins ) {
-				$unique_optins = array();
-				foreach( $optins as $optin_id ) {
-					if ( ! in_array( $optin_id, $unique_optins ) ) {
-						$unique_optins[] = $optin_id;
-						$rate_by_pages[$page_id][] = array(
-							$optin_id => $this->conversion_rate( $optin_id, '0', '0', $page_id ),
-						);
-					}
-				}
-			}
+		$rate_by_pages_sorted = $this->sort_array( $rate_by_pages_unsorted, 'page_rate', $order = SORT_DESC );
+		$output = '';
 
-			$i = 0;
+		if ( ! empty( $rate_by_pages_sorted ) ) {
+			$options_array = ET_Bloom::get_bloom_options();
+			$table_contents = '<ul>';
 
-			foreach ( $rate_by_pages as $page_id => $rate ) {
-				$page_rate = 0;
-				$rates_count = 0;
-				$optins_data = array();
-				$j = 0;
+			for ( $i = 0; $i < 5; $i++ ) {
+				if ( ! empty( $rate_by_pages_sorted[$i] ) ) {
+					$table_contents .= sprintf(
+						'<li class="et_table_page_row">
+							<div class="et_dashboard_table_name et_dashboard_table_column et_table_page_row">%1$s</div>
+							<div class="et_dashboard_table_pages_rate et_dashboard_table_column">%2$s</div>
+							<div style="clear: both;"></div>
+						</li>',
+						-1 == $rate_by_pages_sorted[$i]['page_id']
+							? esc_html__( 'Homepage', 'bloom' )
+							: esc_html( get_the_title( $rate_by_pages_sorted[$i]['page_id'] ) ),
+						esc_html( $rate_by_pages_sorted[$i]['page_rate'] ) . '%'
+					);
+					foreach ( $rate_by_pages_sorted[$i]['optins_data'] as $optin_details ) {
+						if ( isset( $options_array[$optin_details['optin_id']]['child_of'] ) && '' !== $options_array[$optin_details['optin_id']]['child_of'] ) {
+							$status = $options_array[$options_array[$optin_details['optin_id']]['child_of']]['optin_status'];
+						} else {
+							$status = isset( $options_array[$optin_details['optin_id']]['optin_status'] ) ? $options_array[$optin_details['optin_id']]['optin_status'] : 'inactive';
+						}
 
-				foreach ( $rate as $current_optin ) {
-					foreach ( $current_optin as $optin_id => $current_rate ) {
-						$page_rate = $page_rate + $current_rate;
-						$rates_count++;
-
-						$optins_data[$j] = array(
-							'optin_id' => $optin_id,
-							'optin_rate' => $current_rate,
-						);
-
-					}
-					$j++;
-				}
-
-				$average_rate = 0 != $rates_count ? round( $page_rate / $rates_count, 1 ) : 0;
-				$rate_by_pages_unsorted[$i]['page_id'] = $page_id;
-				$rate_by_pages_unsorted[$i]['page_rate'] = $average_rate;
-				$rate_by_pages_unsorted[$i]['optins_data'] = $this->sort_array( $optins_data, 'optin_rate', $order = SORT_DESC );
-
-				$i++;
-			}
-
-			$rate_by_pages_sorted = $this->sort_array( $rate_by_pages_unsorted, 'page_rate', $order = SORT_DESC );
-			$output = '';
-
-			if ( ! empty( $rate_by_pages_sorted ) ) {
-				$options_array = ET_Bloom::get_bloom_options();
-				$table_contents = '<ul>';
-
-				for ( $i = 0; $i < 5; $i++ ) {
-					if ( ! empty( $rate_by_pages_sorted[$i] ) ) {
 						$table_contents .= sprintf(
-							'<li class="et_table_page_row">
-								<div class="et_dashboard_table_name et_dashboard_table_column et_table_page_row">%1$s</div>
+							'<li class="et_table_optin_row et_dashboard_optins_item">
+								<div class="et_dashboard_table_name et_dashboard_table_column et_dashboard_icon et_dashboard_type_%3$s et_dashboard_status_%4$s">%1$s</div>
 								<div class="et_dashboard_table_pages_rate et_dashboard_table_column">%2$s</div>
 								<div style="clear: both;"></div>
 							</li>',
-							-1 == $rate_by_pages_sorted[$i]['page_id']
-								? esc_html__( 'Homepage', 'bloom' )
-								: esc_html( get_the_title( $rate_by_pages_sorted[$i]['page_id'] ) ),
-							esc_html( $rate_by_pages_sorted[$i]['page_rate'] ) . '%'
+							( isset( $options_array[$optin_details['optin_id']]['optin_name'] ) )
+								? esc_html( $options_array[$optin_details['optin_id']]['optin_name'] )
+								: '',
+							esc_html( $optin_details['optin_rate'] ) . '%',
+							( isset( $options_array[$optin_details['optin_id']]['optin_type'] ) )
+								? esc_attr( $options_array[$optin_details['optin_id']]['optin_type'] )
+								: '',
+							esc_attr( $status )
 						);
-						foreach ( $rate_by_pages_sorted[$i]['optins_data'] as $optin_details ) {
-							if ( isset( $options_array[$optin_details['optin_id']]['child_of'] ) && '' !== $options_array[$optin_details['optin_id']]['child_of'] ) {
-								$status = $options_array[$options_array[$optin_details['optin_id']]['child_of']]['optin_status'];
-							} else {
-								$status = isset( $options_array[$optin_details['optin_id']]['optin_status'] ) ? $options_array[$optin_details['optin_id']]['optin_status'] : 'inactive';
-							}
-
-							$table_contents .= sprintf(
-								'<li class="et_table_optin_row et_dashboard_optins_item">
-									<div class="et_dashboard_table_name et_dashboard_table_column et_dashboard_icon et_dashboard_type_%3$s et_dashboard_status_%4$s">%1$s</div>
-									<div class="et_dashboard_table_pages_rate et_dashboard_table_column">%2$s</div>
-									<div style="clear: both;"></div>
-								</li>',
-								( isset( $options_array[$optin_details['optin_id']]['optin_name'] ) )
-									? esc_html( $options_array[$optin_details['optin_id']]['optin_name'] )
-									: '',
-								esc_html( $optin_details['optin_rate'] ) . '%',
-								( isset( $options_array[$optin_details['optin_id']]['optin_type'] ) )
-									? esc_attr( $options_array[$optin_details['optin_id']]['optin_type'] )
-									: '',
-								esc_attr( $status )
-							);
-						}
 					}
 				}
-
-				$table_contents .= '</ul>';
-
-				$output = sprintf(
-					'<div class="et_dashboard_optins_stats et_dashboard_pages_stats">
-						<div class="et_dashboard_optins_list">
-							<ul>
-								<li>
-									<div class="et_dashboard_table_name et_dashboard_table_column et_table_header">%1$s</div>
-									<div class="et_dashboard_table_pages_rate et_dashboard_table_column et_table_header">%2$s</div>
-									<div style="clear: both;"></div>
-								</li>
-							</ul>
-							%3$s
-						</div>
-					</div>',
-					esc_html__( 'Highest converting pages', 'bloom' ),
-					esc_html__( 'Conversion rate', 'bloom' ),
-					$table_contents
-				);
 			}
+
+			$table_contents .= '</ul>';
+
+			$output = sprintf(
+				'<div class="et_dashboard_optins_stats et_dashboard_pages_stats">
+					<div class="et_dashboard_optins_list">
+						<ul>
+							<li>
+								<div class="et_dashboard_table_name et_dashboard_table_column et_table_header">%1$s</div>
+								<div class="et_dashboard_table_pages_rate et_dashboard_table_column et_table_header">%2$s</div>
+								<div style="clear: both;"></div>
+							</li>
+						</ul>
+						%3$s
+					</div>
+				</div>',
+				esc_html__( 'Highest converting pages', 'bloom' ),
+				esc_html__( 'Conversion rate', 'bloom' ),
+				$table_contents
+			);
 		}
 
 		return $output;
@@ -1151,53 +1455,49 @@ class ET_Bloom extends ET_Dashboard {
 	 * @return string
 	 */
 	function generate_lists_stats_table( $orderby = 'count', $include_header = false ) {
-		if ( ! current_user_can( 'manage_options' ) ) {
-			die( -1 );
-		}
+		et_core_security_check( 'manage_options' );
 
-		$options_array = ET_Bloom::get_bloom_options();
+		$all_accounts = $this->_get_accounts();
 		$optins_count = 0;
 		$output = '';
 		$total_subscribers = 0;
 
-		if ( ! empty( $options_array['accounts'] ) ) {
-			foreach ( $options_array['accounts'] as $service => $accounts ) {
-				foreach ( $accounts as $name => $details ) {
-					if ( ! empty( $details['lists'] ) ) {
-						foreach ( $details['lists'] as $id => $list_data ) {
-							if ( 0 === $optins_count ) {
-								if ( true == $include_header ) {
-									$output .= sprintf(
-										'<ul>
-											<li data-table="lists">
-												<div class="et_dashboard_table_name et_dashboard_table_column et_table_header">%1$s</div>
-												<div class="et_dashboard_table_impressions et_dashboard_table_column et_dashboard_icon et_dashboard_sort_button" data-order_by="service">%2$s</div>
-												<div class="et_dashboard_table_rate et_dashboard_table_column et_dashboard_icon et_dashboard_sort_button active_sorting" data-order_by="count">%3$s</div>
-												<div class="et_dashboard_table_conversions et_dashboard_table_column et_dashboard_icon et_dashboard_sort_button" data-order_by="growth">%4$s</div>
-												<div style="clear: both;"></div>
-											</li>
-										</ul>',
-										esc_html__( 'My Lists', 'bloom' ),
-										esc_html__( 'Provider', 'bloom' ),
-										esc_html__( 'Subscribers', 'bloom' ),
-										esc_html__( 'Growth Rate', 'bloom' )
-									);
-								}
-
-								$output .= '<ul class="et_dashboard_table_contents">';
+		foreach ( $all_accounts as $service => $accounts ) {
+			foreach ( $accounts as $name => $details ) {
+				if ( ! empty( $details['lists'] ) ) {
+					foreach ( $details['lists'] as $id => $list_data ) {
+						if ( 0 === $optins_count ) {
+							if ( true == $include_header ) {
+								$output .= sprintf(
+									'<ul>
+										<li data-table="lists">
+											<div class="et_dashboard_table_name et_dashboard_table_column et_table_header">%1$s</div>
+											<div class="et_dashboard_table_impressions et_dashboard_table_column et_dashboard_icon et_dashboard_sort_button" data-order_by="service">%2$s</div>
+											<div class="et_dashboard_table_rate et_dashboard_table_column et_dashboard_icon et_dashboard_sort_button active_sorting" data-order_by="count">%3$s</div>
+											<div class="et_dashboard_table_conversions et_dashboard_table_column et_dashboard_icon et_dashboard_sort_button" data-order_by="growth">%4$s</div>
+											<div style="clear: both;"></div>
+										</li>
+									</ul>',
+									esc_html__( 'My Lists', 'bloom' ),
+									esc_html__( 'Provider', 'bloom' ),
+									esc_html__( 'Subscribers', 'bloom' ),
+									esc_html__( 'Growth Rate', 'bloom' )
+								);
 							}
 
-							$total_subscribers += $list_data['subscribers_count'];
-
-							$unsorted_array[] = array(
-								'name'    => $list_data['name'],
-								'service' => $service,
-								'count'   => $list_data['subscribers_count'],
-								'growth'  => $list_data['growth_week'],
-							);
-
-							$optins_count++;
+							$output .= '<ul class="et_dashboard_table_contents">';
 						}
+
+						$total_subscribers += $list_data['subscribers_count'];
+
+						$unsorted_array[] = array(
+							'name'    => $list_data['name'],
+							'service' => $service,
+							'count'   => $list_data['subscribers_count'],
+							'growth'  => $list_data['growth_week'],
+						);
+
+						$optins_count++;
 					}
 				}
 			}
@@ -1219,14 +1519,14 @@ class ET_Bloom extends ET_Dashboard {
 					</li>',
 					esc_html( $single_list['name'] ),
 					esc_html( $single_list['service'] ),
-					'ontraport' == $single_list['service'] ? esc_html__( 'n/a', 'bloom' ) : esc_html( $single_list['count'] ),
+					esc_html( $single_list['count'] ),
 					esc_html( $single_list['growth'] ),
 					esc_html__( 'week', 'bloom' )
 				);
 			}
 		}
 
-		if ( 0 < $optins_count ) {
+		if ( $optins_count > 0 ) {
 			$output .= sprintf(
 				'<li class="et_dashboard_optins_item_bottom_row">
 					<div class="et_dashboard_table_name et_dashboard_table_column"></div>
@@ -1246,14 +1546,13 @@ class ET_Bloom extends ET_Dashboard {
 
 	/**
 	 * Calculates the conversion rate for the optin
-	 * Can calculate rate for removed/existing optins and for particular pages.
 	 * @return int
 	 */
-	function conversion_rate( $optin_id, $con_data = '0', $imp_data = '0', $page_id = 'all' ) {
+	function conversion_rate( $optin_id, $con_data = '0', $imp_data = '0' ) {
 		$conversion_rate = 0;
 
-		$current_conversion = '0' === $con_data ? $this->stats_count( $optin_id, 'con', $page_id ) : $con_data;
-		$current_impression = '0' === $imp_data ? $this->stats_count( $optin_id, 'imp', $page_id ) : $imp_data;
+		$current_conversion = '0' === $con_data ? $this->stats_count( $optin_id, 'con' ) : $con_data;
+		$current_impression = '0' === $imp_data ? $this->stats_count( $optin_id, 'imp' ) : $imp_data;
 
 		if ( 0 < $current_impression ) {
 			$conversion_rate = 	( $current_conversion * 100 )/$current_impression;
@@ -1265,95 +1564,173 @@ class ET_Bloom extends ET_Dashboard {
 	}
 
 	/**
-	 * Calculates the conversions/impressions count for the optin
-	 * Can calculate conversions for particular pages.
+	 * Calculates the conversion rates for pages
+	 * @return array()
+	 */
+	function get_pages_conversion_rate( $pages_array ) {
+		$sql = "SELECT id";
+		$sql_args = array();
+
+		foreach( $pages_array as $page_id => $optins_array ) {
+			if ( empty( $optins_array ) ) {
+				continue;
+			}
+
+			foreach( $optins_array as $optin_id ) {
+				if ( '' === $optin_id ) {
+					continue;
+				}
+
+				$sql .= ",sum(case when page_id=%s AND optin_id=%s AND record_type ='con' then 1 else 0 end) %s
+						,sum(case when page_id=%s AND optin_id=%s AND record_type ='imp' then 1 else 0 end) %s";
+				$sql_args[] = sanitize_text_field( $page_id );
+				$sql_args[] = sanitize_text_field( $optin_id );
+				$sql_args[] = sanitize_text_field( $page_id ) . '_' . sanitize_text_field( $optin_id ) . '_' . 'con';
+				$sql_args[] = sanitize_text_field( $page_id );
+				$sql_args[] = sanitize_text_field( $optin_id );
+				$sql_args[] = sanitize_text_field( $page_id ) . '_' . sanitize_text_field( $optin_id ) . '_' . 'imp';
+			}
+		}
+
+		$sql .= " FROM __table_name__";
+
+		$stats_data = $this->perform_stats_sql_request( $sql, 'get_results', $sql_args );
+
+		if ( empty( $stats_data ) ) {
+			return array();
+		}
+
+		$rate_by_pages = array();
+
+		foreach( $pages_array as $page_id => $optins_array ) {
+			if ( empty( $optins_array ) ) {
+				continue;
+			}
+
+			foreach( $optins_array as $optin_id ) {
+				if ( '' === $optin_id ) {
+					continue;
+				}
+
+				$index = $page_id . '_' . $optin_id;
+				$conversions_count = isset( $stats_data[0][$index . '_con'] ) ? $stats_data[0][$index . '_con'] : 0;
+				$impressions_count = isset( $stats_data[0][$index . '_imp'] ) ? $stats_data[0][$index . '_imp'] : 0;
+
+				$rate_by_pages[$page_id][] = array(
+					$optin_id => $this->conversion_rate( '', $conversions_count, $impressions_count ),
+				);
+			}
+		}
+
+		return $rate_by_pages;
+	}
+
+	/**
+	 * Gets the conversions/impressions count for the optin from cache if exists
 	 * @return int
 	 */
-	function stats_count( $optin_id, $type = 'imp', $page_id = 'all' ) {
-		global $wpdb;
+	function stats_count( $optin_id, $type = 'imp' ) {
+		$stats_cache = get_option( 'et_bloom_stats_optin_cache', array() );
 
-		$stats_count = 0;
-		$optin_id = 'all' == $optin_id ? '*' : $optin_id;
+		// retrieve data from cache if exists, otherwise return 0.
+		if ( ! isset( $stats_cache['optins_cache'] ) || ! isset( $stats_cache['optins_cache'][ $optin_id ] ) || ! isset( $stats_cache['optins_cache'][ $optin_id ][ $type ] ) ) {
+			return 0;
+		}
 
-		$table_name = $wpdb->prefix . 'et_bloom_stats';
-
-		if ( $wpdb->get_var( "SHOW TABLES LIKE '$table_name'" ) == $table_name ) {
-			// construct sql query to get all the conversions from db
-			$sql = "SELECT COUNT(*) FROM $table_name WHERE record_type = %s AND optin_id = %s";
-			$sql_args = array(
-				sanitize_text_field( $type ),
-				sanitize_text_field( $optin_id )
-			);
-
-			if ( 'all' !== $page_id ) {
-				$sql .= " AND page_id = %s";
-				$sql_args[] = sanitize_text_field( $page_id );
+		if ( 'all' === $optin_id ) {
+			foreach( $stats_cache['optins_cache'] as $optin => $optin_stats ) {
+				$count = 0;
+				if ( 'last_updated' !== $optin ) {
+					$count += $optin_stats[ $type ];
+				}
 			}
 
-			// cache the data from conversions table
-			$stats_count = $wpdb->get_var( $wpdb->prepare( $sql, $sql_args ) );
+			return $count;
+		} else {
+			return $stats_cache['optins_cache'][ $optin_id ][ $type ];
 		}
-
-		return $stats_count;
 	}
 
-	function get_conversions() {
-		global $wpdb;
-		$conversions = array();
+	/**
+	 * Get conversions by period
+	 *
+	 * @param int    $period       Optional. The numeric period of chosen unit of time.
+	 * @param string $day_or_month Optional. The unit of time. Accepts 'day','month'.
+	 * @param string $list_id      Optional. The list id to get conversions for.
+	 *
+	 * @return array Results array.
+	 *               Empty array if stats data is empty.
+	 */
+	function get_conversions_by_period( $period = 28, $day_or_month = 'day', $list_id = '' ) {
+		// whitelist the possible values, since this is directly included unescaped into the sql string
+		$day_or_month = in_array( $day_or_month, array( 'day', 'month' ) ) ? $day_or_month : 'day';
+		$sql = "SELECT id";
+		$sql_args = array();
 
-		$table_name = $wpdb->prefix . 'et_bloom_stats';
+		for ( $i = $period; $i > 0; $i-- ) {
+			// prepare sql request to retrieve the conversions count by period
+			$sql .= ",sum(case when record_date BETWEEN date(now()-interval %d $day_or_month ) AND date(now()-interval %d $day_or_month) then 1 else 0 end) %s";
 
-		if ( $wpdb->get_var( "SHOW TABLES LIKE '$table_name'" ) == $table_name ) {
-			// construct sql query to get all the conversions from db
-			$sql = "SELECT * FROM $table_name WHERE record_type = 'con' ORDER BY record_date DESC";
-
-			// cache the data from conversions table
-			$conversions = $wpdb->get_results( $sql, ARRAY_A );
+			$sql_args[] = $i;
+			$sql_args[] = $i - 1;
+			$sql_args[] = '_' . $i;
 		}
 
-		return $conversions;
+		// limit the sql query by date to speed up the request to DB
+		$sql .= " FROM __table_name__ WHERE record_type ='con' AND record_date >= date(now()-interval %d $day_or_month) ";
+		$sql_args[] = absint( $period );
+
+		if ( '' !== $list_id ) {
+			$sql .= " AND list_id=%s";
+			$sql_args[] = sanitize_text_field( $list_id );
+		}
+
+		$sql .= " ORDER BY record_date DESC";
+
+		$stats_data = $this->perform_stats_sql_request( $sql, 'get_results', $sql_args );
+
+		if ( empty( $stats_data ) ) {
+			return array();
+		}
+
+		// remove unneeded data from array
+		unset( $stats_data[0]['id'] );
+
+		return $stats_data[0];
 	}
 
-	function get_all_stats_pages() {
-		global $wpdb;
+	function get_all_pages_with_optins() {
+		// construct sql query to get all the unique page IDs with unique optins from stats table
+		$sql = "SELECT DISTINCT page_id, optin_id FROM __table_name__";
 
-		$all_pages = array();
+		$all_pages = $this->perform_stats_sql_request( $sql );
 
-		$table_name = $wpdb->prefix . 'et_bloom_stats';
-
-		if ( $wpdb->get_var( "SHOW TABLES LIKE '$table_name'" ) == $table_name ) {
-			// construct sql query to get all the conversions from db
-			$sql = "SELECT DISTINCT page_id FROM $table_name";
-
-			// cache the data from conversions table
-			$all_pages = $wpdb->get_results( $sql, ARRAY_A );
+		if ( empty( $all_pages ) ) {
+			return array();
 		}
 
-		return $all_pages;
-	}
+		$pages_array = array();
 
-	function get_unique_optins_by_page( $page_id ) {
-		global $wpdb;
-
-		$all_optins = array();
-		$all_optins_final = array();
-
-		$table_name = $wpdb->prefix . 'et_bloom_stats';
-
-		if ( $wpdb->get_var( "SHOW TABLES LIKE '$table_name'" ) == $table_name ) {
-			// construct sql query to get all the conversions from db
-			$sql = "SELECT DISTINCT optin_id FROM $table_name where page_id = %s";
-			$sql_args = array( sanitize_text_field( $page_id ) );
-
-			// cache the data from conversions table
-			$all_optins = $wpdb->get_results( $wpdb->prepare( $sql, $sql_args ), ARRAY_A );
+		// prepare the array of pages
+		foreach( $all_pages as $index => $data ) {
+			$pages_array[] = $data['page_id'];
 		}
-		if ( ! empty( $all_optins ) ) {
-			foreach( $all_optins as $optin ) {
-				$all_optins_final[] = $optin['optin_id'];
+
+		// remove all duplicated records
+		$pages_array = array_unique( $pages_array );
+
+		$pages_with_optins_array = array();
+
+		// prepare the final array with pages to optins relations
+		foreach( $pages_array as $i => $single_page_id ) {
+			foreach( $all_pages as $j => $pages_data ) {
+				if ( $single_page_id === $pages_data['page_id'] ) {
+					$pages_with_optins_array[ $single_page_id ][] = $pages_data['optin_id'];
+				}
 			}
 		}
-		return $all_optins_final;
+
+		return $pages_with_optins_array;
 	}
 
 	/**
@@ -1363,16 +1740,17 @@ class ET_Bloom extends ET_Dashboard {
 	function calculate_growth_rate( $list_id ) {
 		$list_id = 'all' == $list_id ? '' : $list_id;
 
-		$stats = $this->generate_stats_by_period( 28, 'day', $this->get_conversions(), $list_id );
-		$total_subscribers = $stats['total_subscribers_28'];
+		$stats = $this->get_conversions_by_period( 28, 'day', $list_id );
+		$total_subscribers = 0;
 		$oldest_record = -1;
 
-		for ( $i = 28; $i > 0; $i-- ) {
-			if ( !empty( $stats[$i] ) ) {
-				if ( -1 === $oldest_record ) {
-					$oldest_record = $i;
-				}
+		foreach ( $stats as $day => $count ) {
+			if ( 0 !== $count && -1 === $oldest_record ) {
+				// get the clean number from $day value.
+				// it stored like <underscore> followed by number ( ex. "_1" )
+				$oldest_record = intval( substr( $day, 1 ) );
 			}
+			$total_subscribers += $count;
 		}
 
 		if ( -1 === $oldest_record ) {
@@ -1391,18 +1769,16 @@ class ET_Bloom extends ET_Dashboard {
 	 * @return string
 	 */
 	function calculate_subscribers( $period, $service = '', $account_name = '', $list_id = '' ) {
-		$options_array = ET_Bloom::get_bloom_options();
+		$all_accounts      = $this->_get_accounts();
 		$subscribers_count = 0;
 
 		if ( 'all' === $period ) {
-			if ( ! empty( $options_array['accounts']) ) {
-				foreach ( $options_array['accounts'] as $service => $accounts ) {
-					foreach ( $accounts as $name => $details ) {
-						if ( ! empty( $details['lists'] ) ) {
-							foreach( $details['lists'] as $id => $list_details ) {
-								if ( ! empty( $list_details['subscribers_count'] ) ) {
-									$subscribers_count += $list_details['subscribers_count'];
-								}
+			foreach ( $all_accounts as $service => $accounts ) {
+				foreach ( $accounts as $name => $details ) {
+					if ( ! empty( $details['lists'] ) ) {
+						foreach( $details['lists'] as $id => $list_details ) {
+							if ( ! empty( $list_details['subscribers_count'] ) ) {
+								$subscribers_count += $list_details['subscribers_count'];
 							}
 						}
 					}
@@ -1421,60 +1797,11 @@ class ET_Bloom extends ET_Dashboard {
 			die( -1 );
 		}
 
-		$all_stats_rows = $this->get_conversions();
-
-		$stats = $this->generate_stats_by_period( $period, $day_or_month, $all_stats_rows, $list_id );
+		$stats = $this->get_conversions_by_period( $period, $day_or_month, $list_id );
 
 		$output = $this->generate_stats_graph_output( $period, $day_or_month, $stats );
 
 		return $output;
-	}
-
-	/**
-	 * Generates stats array by specified period and using provided data.
-	 * @return array
-	 */
-	function generate_stats_by_period( $period, $day_or_month, $input_data, $list_id = '' ) {
-		$subscribers = array();
-
-		$j = 0;
-		$count_subscribers = 0;
-
-		for( $i = 1; $i <= $period; $i++ ) {
-			if ( array_key_exists( $j, $input_data ) ) {
-				$count_subtotal = 1;
-
-				while ( array_key_exists( $j, $input_data ) && strtotime( 'now' ) <= strtotime( sprintf( '+ %d %s', $i, 'day' == $day_or_month ? 'days' : 'month' ), strtotime( $input_data[ $j ][ 'record_date' ] ) ) ) {
-
-					if ( '' === $list_id || ( '' !== $list_id && $list_id === $input_data[$j]['list_id'] ) ) {
-						$subscribers[$i]['subtotal'] = $count_subtotal++;
-
-						$count_subscribers++;
-
-						if ( array_key_exists( $i, $subscribers ) && array_key_exists( $input_data[$j]['list_id'], $subscribers[$i] ) ) {
-							$subscribers[$i][$input_data[$j]['list_id']]['count']++;
-						} else {
-							$subscribers[$i][$input_data[$j]['list_id']]['count'] = 1;
-						}
-					}
-
-					$j++;
-				}
-			}
-
-			// Add total counts for each period into array
-			if ( 'day' == $day_or_month ) {
-				if ( $i == $period ) {
-					$subscribers[ 'total_subscribers_' . $period ] = $count_subscribers;
-				}
-			} else {
-				if ( $i == 12 ) {
-					$subscribers[ 'total_subscribers_12' ] = $count_subscribers;
-				}
-			}
-		}
-
-		return $subscribers;
 	}
 
 	/**
@@ -1488,18 +1815,22 @@ class ET_Bloom extends ET_Dashboard {
 			esc_attr( $period )
 		);
 		$bars_count = 0;
+		$total_subscribers = 0;
+		$data = array_reverse( $data );
 
-		for ( $i = 1; $i <= $period ; $i++ ) {
+		foreach( $data as $index => $count ) {
 			$result .= sprintf( '<li%1$s>',
-				$period == $i ? ' class="et_bloom_graph_last"' : ''
+				intval( $period ) === intval( substr( $index, 1 ) ) ? ' class="et_bloom_graph_last"' : ''
 			);
 
-			if ( array_key_exists( $i, $data ) ) {
+			if ( 0 < $count ) {
 				$result .= sprintf( '<div value="%1$s" class="et_bloom_graph_bar">',
-					esc_attr( $data[$i]['subtotal'] )
+					esc_attr( $count )
 				);
 
 				$bars_count++;
+
+				$total_subscribers += $count;
 
 				$result .= '</div>';
 			} else {
@@ -1512,7 +1843,7 @@ class ET_Bloom extends ET_Dashboard {
 		$result .= '</ul>';
 
 		if ( 0 < $bars_count ) {
-			$per_day = round( $data['total_subscribers_' . $period] / $bars_count, 0 );
+			$per_day = round( $total_subscribers / $bars_count, 0 );
 		} else {
 			$per_day = 0;
 		}
@@ -1524,7 +1855,7 @@ class ET_Bloom extends ET_Dashboard {
 			</div>',
 			sprintf(
 				'%1$s %2$s',
-				esc_html( $data['total_subscribers_' . $period] ),
+				esc_html( $total_subscribers ),
 				esc_html__( 'New Signups', 'bloom' )
 			),
 			sprintf(
@@ -1621,13 +1952,7 @@ class ET_Bloom extends ET_Dashboard {
 	 * Generates the fields set for new account based on service and passes it to jQuery
 	 */
 	function generate_new_account_fields() {
-		if ( ! wp_verify_nonce( $_POST['accounts_tab_nonce'] , 'accounts_tab' ) ) {
-			die( -1 );
-		}
-
-		if ( ! current_user_can( 'manage_options' ) ) {
-			die( -1 );
-		}
+		et_core_security_check( 'manage_options', 'accounts_tab' );
 
 		$service = ! empty( $_POST['bloom_service'] ) ? sanitize_text_field( $_POST['bloom_service'] ) : '';
 
@@ -1657,13 +1982,7 @@ class ET_Bloom extends ET_Dashboard {
 	 * Generates the fields set for account editing form based on service and account name and passes it to jQuery
 	 */
 	function generate_edit_account_page(){
-		if ( ! wp_verify_nonce( $_POST['accounts_tab_nonce'] , 'accounts_tab' ) ) {
-			die( -1 );
-		}
-
-		if ( ! current_user_can( 'manage_options' ) ) {
-			die( -1 );
-		}
+		et_core_security_check( 'manage_options', 'accounts_tab' );
 
 		$edit_account = ! empty( $_POST['bloom_edit_account'] ) ? sanitize_text_field( $_POST['bloom_edit_account'] ) : '';
 		$account_name = ! empty( $_POST['bloom_account_name'] ) ? sanitize_text_field( $_POST['bloom_account_name'] ) : '';
@@ -1706,20 +2025,23 @@ class ET_Bloom extends ET_Dashboard {
 				esc_html__( 'Re-Authorize', 'bloom' ),
 				esc_attr( $account_name ),
 				$this->display_currrent_lists( $service, $account_name ),
-				esc_html__( 'save & exit', 'bloom' ),
+				esc_html__( 'Go Back', 'bloom' ),
 				esc_attr( $service )
 			);
+
 		} else {
-			$providers = ET_Bloom_Email_Providers::get_providers();
-			$additional_provider_options = '';
-			if ( ! empty( $providers ) ) {
-				foreach ( $providers as $provider ) {
-					$additional_provider_options .= sprintf(
-						'<option value="%1$s">%2$s</option>',
-						esc_attr( $provider->slug ),
-						esc_html( $provider->name )
-					);
+			$provider_options = '';
+
+			foreach ( (array) $this->provider_names as $provider_slug => $provider_name ) {
+				if ( 'empty' === $provider_slug || 'custom_html' === $provider_slug ) {
+					continue;
 				}
+
+				$provider_options .= sprintf(
+					'<option value="%1$s">%2$s</option>',
+					esc_attr( $provider_slug ),
+					esc_html( $provider_name )
+				);
 			}
 
 			printf(
@@ -1728,49 +2050,21 @@ class ET_Bloom extends ET_Dashboard {
 					<div style="clear:both;"></div>
 					<ul>
 						<li class="select et_dashboard_select_provider_new">
-							<p>%19$s</p>
+							<p>%2$s</p>
 							<select>
-								<option value="empty" selected>%2$s</option>
-								<option value="mailchimp">%3$s</option>
-								<option value="aweber">%4$s</option>
-								<option value="constant_contact">%5$s</option>
-								<option value="campaign_monitor">%6$s</option>
-								<option value="madmimi">%7$s</option>
-								<option value="icontact">%8$s</option>
-								<option value="getresponse">%9$s</option>
-								<option value="sendinblue">%10$s</option>
-								<option value="mailpoet">%11$s</option>
-								<option value="ontraport">%13$s</option>
-								<option value="feedblitz">%14$s</option>
-								<option value="infusionsoft">%15$s</option>
-								<option value="hubspot">%16$s</option>
-								<option value="salesforce">%17$s</option>
-								%18$s
+								<option value="empty" selected>%3$s</option>
+								%4$s
 							</select>
 						</li>
 					</ul>
 					<ul class="et_dashboard_new_account_fields"><li></li></ul>
-					<button class="et_dashboard_icon save_account_tab">%12$s</button>
+					<button class="et_dashboard_icon save_account_tab">%5$s</button>
 				</div>',
 				esc_html__( 'New account settings', 'bloom' ),
+				esc_html__( 'Select Email Provider', 'bloom' ),
 				esc_html__( 'Select One...', 'bloom' ),
-				esc_html__( 'MailChimp', 'bloom' ),
-				esc_html__( 'AWeber', 'bloom' ),
-				esc_html__( 'Constant Contact', 'bloom' ),
-				esc_html__( 'Campaign Monitor', 'bloom' ),
-				esc_html__( 'Mad Mimi', 'bloom' ),
-				esc_html__( 'iContact', 'bloom' ),
-				esc_html__( 'GetResponse', 'bloom' ),
-				esc_html__( 'Sendinblue', 'bloom' ),
-				esc_html__( 'MailPoet', 'bloom' ),
-				esc_html__( 'save & exit', 'bloom' ),
-				esc_html__( 'Ontraport', 'bloom' ),
-				esc_html__( 'Feedblitz', 'bloom' ),
-				esc_html__( 'Infusionsoft', 'bloom' ),
-				esc_html__( 'HubSpot', 'bloom' ),
-				esc_html__( 'SalesForce', 'bloom' ),
-				$additional_provider_options, // #18
-				esc_html__( 'Select Email Provider', 'bloom' )
+				$provider_options,
+				esc_html__( 'Go Back', 'bloom' ) // 5
 			);
 		}
 
@@ -1783,13 +2077,7 @@ class ET_Bloom extends ET_Dashboard {
 	 * Generates the list of Lists for specific account and passes it to jQuery
 	 */
 	function generate_current_lists() {
-		if ( ! wp_verify_nonce( $_POST['accounts_tab_nonce'] , 'accounts_tab' ) ) {
-			die( -1 );
-		}
-
-		if ( ! current_user_can( 'manage_options' ) ) {
-			die( -1 );
-		}
+		et_core_security_check( 'manage_options', 'accounts_tab' );
 
 		$service = ! empty( $_POST['bloom_service'] ) ? sanitize_text_field( $_POST['bloom_service'] ) : '';
 		$name = ! empty( $_POST['bloom_upd_name'] ) ? sanitize_text_field( $_POST['bloom_upd_name'] ) : '';
@@ -1801,26 +2089,16 @@ class ET_Bloom extends ET_Dashboard {
 
 	/**
 	 * Generates the list of Lists for specific account
+	 *
 	 * @return string
 	 */
 	function display_currrent_lists( $service = '', $name = '' ) {
-		if ( ! current_user_can( 'manage_options' ) ) {
-			die( -1 );
-		}
+		et_core_security_check();
 
-		$options_array = ET_Bloom::get_bloom_options();
-		$all_lists = array();
-		$name = str_replace( array( '"', "'" ), '', stripslashes( $name ) );
+		$list_names = $this->get_subscriber_lists_for_account( $service, $name, 'name' );
 
-		// SalesForce has no list
-		if ( 'salesforce' === $service ) {
+		if ( false === $list_names ) {
 			return '';
-		}
-
-		if ( ! empty( $options_array['accounts'][$service][$name]['lists'] ) ) {
-			foreach ( $options_array['accounts'][$service][$name]['lists'] as $id => $list_details ) {
-				$all_lists[] = $list_details['name'];
-			}
 		}
 
 		$output = sprintf(
@@ -1830,170 +2108,175 @@ class ET_Bloom extends ET_Dashboard {
 				<p>%2$s</p>
 			</div>',
 			esc_html__( 'Account Lists', 'bloom' ),
-			! empty( $all_lists )
-				? implode( ', ', array_map( 'esc_html', $all_lists ) )
+			! empty( $list_names )
+				? implode( ', ', array_map( 'esc_html', $list_names ) )
 				: esc_html__( 'No lists available for this account', 'bloom' )
 		);
 
 		return $output;
 	}
 
+
 	/**
-	 * Saves the account data during editing/creating account
+	 * Get subscriber lists for an account, optionally limit returned data to a specific set of data keys.
+	 *
+	 * @param string $service  The name of the provider.
+	 * @param string $name     The name of the provider account.
+	 * @param string $only_key Only return values under this key. Optional.
+	 *
+	 * {@internal To get just the names of the subscriber lists for an account:
+	 *            `get_subscriber_lists_for_account( 'aweber', 'some-account', 'name' )`}
+	 *
+	 * @return array
 	 */
-	function save_account_tab() {
-		if ( ! wp_verify_nonce( $_POST['accounts_tab_nonce'] , 'accounts_tab' ) ) {
-			die( -1 );
+	public function get_subscriber_lists_for_account( $service, $name, $only_key = '' ) {
+		$name    = str_replace( array( '"', "'" ), '', stripslashes( $name ) );
+		$account = $this->_get_account( $service, $name );
+		$result  = array();
+		$lists   = isset( $account['lists'] ) ? $account['lists'] : array();
+
+		foreach ( $lists as $id => $list_info ) {
+			if ( empty( $only_key ) ) {
+				$result[ $id ] = $list_info;
+				continue;
+			}
+
+			if ( isset( $list_info[ $only_key ] ) ) {
+				$result[] = $list_info[ $only_key ];
+			}
 		}
 
-		if ( ! current_user_can( 'manage_options' ) ) {
-			die( -1 );
+		// Salesforce doesn't support lists on non-ssl websites.
+		if ( 'salesforce' === $service && ! is_ssl() ) {
+			return array();
 		}
 
-		$service = ! empty( $_POST['bloom_service'] ) ? sanitize_text_field( $_POST['bloom_service'] ) : '';
-		$name = ! empty( $_POST['bloom_account_name'] ) ? sanitize_text_field( $_POST['bloom_account_name'] ) : '';
-
-		$options_array = ET_Bloom::get_bloom_options();
-
-		if ( ! isset( $options_array['accounts'][$service][$name] ) ) {
-			$this->update_account( $service, $name, array(
-				'lists' => array(),
-				'is_authorized' => 'false',
-			) );
-		}
-
-		die();
+		return $result;
 	}
 
 	/**
 	 * Generates and displays the table with all accounts for Accounts tab
 	 */
 	function display_accounts_table(){
-		if ( ! current_user_can( 'manage_options' ) ) {
-			die( -1 );
-		}
+		et_core_security_check();
 
-		$options_array = ET_Bloom::get_bloom_options();
+		$services = $this->_get_accounts();
 
 		echo '<div class="et_dashboard_accounts_content">';
-		if( ! empty( $options_array['accounts'] ) ) {
-			foreach ( $options_array['accounts'] as $service => $details ) {
-				if ( ! empty( $details ) ) {
-					$optins_count = 0;
-					$output = '';
-					printf(
-						'<div class="et_dashboard_row et_dashboard_accounts_title">
-							<span class="et_dashboard_service_logo_%1$s"></span>
-						</div>',
-						esc_attr( $service )
-					);
-					foreach ( $details as $account_name => $value ) {
-						if ( 0 === $optins_count ) {
-							$output .= sprintf(
-								'<div class="et_dashboard_optins_list">
-									<ul>
-										<li>
-											<div class="et_dashboard_table_acc_name et_dashboard_table_column et_dashboard_table_header">%1$s</div>
-											<div class="et_dashboard_table_subscribers et_dashboard_table_column et_dashboard_table_header">%2$s</div>
-											<div class="et_dashboard_table_growth_rate et_dashboard_table_column et_dashboard_table_header">%3$s</div>
-											<div class="et_dashboard_table_actions et_dashboard_table_column"></div>
-											<div style="clear: both;"></div>
-										</li>',
-								esc_html__( 'Account name', 'bloom' ),
-								esc_html__( 'Subscribers', 'bloom' ),
-								esc_html__( 'Growth rate', 'bloom' )
-							);
-						}
 
-						// Force "faux authorized" for SalesForce, since it is web-to-lead based
-						if ( 'salesforce' === $service ) {
-							$value['is_authorized'] = 'true';
-						}
-
-						$output .= sprintf(
-							'<li class="et_dashboard_optins_item" data-account_name="%1$s" data-service="%2$s">
-								<div class="et_dashboard_table_acc_name et_dashboard_table_column">%3$s</div>
-								<div class="et_dashboard_table_subscribers et_dashboard_table_column"></div>
-								<div class="et_dashboard_table_growth_rate et_dashboard_table_column"></div>',
-							esc_attr( $account_name ),
-							esc_attr( $service ),
-							esc_html( $account_name )
-						);
-
-						$output .= sprintf(	'
-								<div class="et_dashboard_table_actions et_dashboard_table_column">
-									<span class="et_dashboard_icon_edit_account et_optin_button et_dashboard_icon" title="%8$s" data-account_name="%1$s" data-service="%2$s"></span>
-									<span class="et_dashboard_icon_delete et_optin_button et_dashboard_icon" title="%4$s"><span class="et_dashboard_confirmation">%5$s</span></span>
-									%3$s
-									<span class="et_dashboard_icon_indicator_%7$s et_optin_button et_dashboard_icon" title="%6$s"></span>
-								</div>
-								<div style="clear: both;"></div>
-							</li>',
-							esc_attr( $account_name ),
-							esc_attr( $service ),
-							( isset( $value['is_authorized'] ) && 'true' == $value['is_authorized'] )
-								? sprintf( '
-									<span class="et_dashboard_icon_update_lists et_optin_button et_dashboard_icon" title="%1$s" data-account_name="%2$s" data-service="%3$s">
-										<span class="spinner"></span>
-									</span>',
-									esc_attr__( 'Update Lists', 'bloom' ),
-									esc_attr( $account_name ),
-									esc_attr( $service )
-								)
-								: '',
-							esc_attr__( 'Remove account', 'bloom' ),
-							sprintf(
-								'%1$s<span class="et_dashboard_confirm_delete" data-optin_id="%4$s" data-remove_account="true">%2$s</span><span class="et_dashboard_cancel_delete">%3$s</span>',
-								esc_html__( 'Remove this account from list?', 'bloom' ),
-								esc_html__( 'Yes', 'bloom' ),
-								esc_html__( 'No', 'bloom' ),
-								esc_attr( $account_name )
-							), //#5
-							( isset( $value['is_authorized'] ) && 'true' == $value['is_authorized'] )
-								? esc_html__( 'Authorized', 'bloom' )
-								: esc_html__( 'Not Authorized', 'bloom' ),
-							( isset( $value['is_authorized'] ) && 'true' == $value['is_authorized'] )
-								? 'check'
-								: 'dot',
-							esc_html__( 'Edit account', 'bloom' )
-						);
-
-						if ( isset( $value['lists'] ) && ! empty( $value['lists'] ) ) {
-							foreach ( $value['lists'] as $id => $list ) {
-								$output .= sprintf( '
-									<li class="et_dashboard_lists_row">
-										<div class="et_dashboard_table_acc_name et_dashboard_table_column">%1$s</div>
-										<div class="et_dashboard_table_subscribers et_dashboard_table_column">%2$s</div>
-										<div class="et_dashboard_table_growth_rate et_dashboard_table_column">%3$s / %4$s</div>
-										<div class="et_dashboard_table_actions et_dashboard_table_column"></div>
-									</li>',
-									esc_html( $list['name'] ),
-									'ontraport' == $service ? esc_html__( 'n/a', 'bloom' ) : esc_html( $list['subscribers_count'] ),
-									esc_html( $list['growth_week'] ),
-									esc_html__( 'week', 'bloom' )
-								);
-							}
-						} else {
-							$output .= sprintf(
-								'<li class="et_dashboard_lists_row">
-									<div class="et_dashboard_table_acc_name et_dashboard_table_column">%1$s</div>
-									<div class="et_dashboard_table_subscribers et_dashboard_table_column"></div>
-									<div class="et_dashboard_table_growth_rate et_dashboard_table_column"></div>
-									<div class="et_dashboard_table_actions et_dashboard_table_column"></div>
-								</li>',
-								esc_html__( 'No lists available', 'bloom' )
-							);
-						}
-
-						$optins_count++;
-					}
-
-					echo $output;
-					echo '
-						</ul>
-					</div>';
-				}
+		foreach ( (array) $services as $service => $accounts ) {
+			if ( empty( $accounts ) ) {
+				continue;
 			}
+
+			$optins_count = 0;
+			$output = '';
+			printf(
+				'<div class="et_dashboard_row et_dashboard_accounts_title">
+					<span class="et_dashboard_service_logo_%1$s"></span>
+				</div>',
+				esc_attr( $service )
+			);
+			foreach ( $accounts as $account_name => $account_info ) {
+				if ( 0 === $optins_count ) {
+					$output .= sprintf(
+						'<div class="et_dashboard_optins_list">
+							<ul>
+								<li>
+									<div class="et_dashboard_table_acc_name et_dashboard_table_column et_dashboard_table_header">%1$s</div>
+									<div class="et_dashboard_table_subscribers et_dashboard_table_column et_dashboard_table_header">%2$s</div>
+									<div class="et_dashboard_table_growth_rate et_dashboard_table_column et_dashboard_table_header">%3$s</div>
+									<div class="et_dashboard_table_actions et_dashboard_table_column"></div>
+									<div style="clear: both;"></div>
+								</li>',
+						esc_html__( 'Account name', 'bloom' ),
+						esc_html__( 'Subscribers', 'bloom' ),
+						esc_html__( 'Growth rate', 'bloom' )
+					);
+				}
+
+				$output .= sprintf(
+					'<li class="et_dashboard_optins_item" data-account_name="%1$s" data-service="%2$s">
+						<div class="et_dashboard_table_acc_name et_dashboard_table_column">%3$s</div>
+						<div class="et_dashboard_table_subscribers et_dashboard_table_column"></div>
+						<div class="et_dashboard_table_growth_rate et_dashboard_table_column"></div>',
+					esc_attr( $account_name ),
+					esc_attr( $service ),
+					esc_html( $account_name )
+				);
+
+				$output .= sprintf(	'
+						<div class="et_dashboard_table_actions et_dashboard_table_column">
+							<span class="et_dashboard_icon_edit_account et_optin_button et_dashboard_icon" title="%8$s" data-account_name="%1$s" data-service="%2$s"></span>
+							<span class="et_dashboard_icon_delete et_optin_button et_dashboard_icon" title="%4$s"><span class="et_dashboard_confirmation">%5$s</span></span>
+							%3$s
+							<span class="et_dashboard_icon_indicator_%7$s et_optin_button et_dashboard_icon" title="%6$s"></span>
+						</div>
+						<div style="clear: both;"></div>
+					</li>',
+					esc_attr( $account_name ),
+					esc_attr( $service ),
+					$this->is_authorized( $account_info )
+						? sprintf( '
+							<span class="et_dashboard_icon_update_lists et_optin_button et_dashboard_icon" title="%1$s" data-account_name="%2$s" data-service="%3$s">
+								<span class="spinner"></span>
+							</span>',
+							esc_attr__( 'Update Lists', 'bloom' ),
+							esc_attr( $account_name ),
+							esc_attr( $service )
+						)
+						: '',
+					esc_attr__( 'Remove account', 'bloom' ),
+					sprintf(
+						'%1$s<span class="et_dashboard_confirm_delete" data-optin_id="%4$s" data-remove_account="true">%2$s</span><span class="et_dashboard_cancel_delete">%3$s</span>',
+						esc_html__( 'Remove this account from list?', 'bloom' ),
+						esc_html__( 'Yes', 'bloom' ),
+						esc_html__( 'No', 'bloom' ),
+						esc_attr( $account_name )
+					), //#5
+					$this->is_authorized( $account_info )
+						? esc_html__( 'Authorized', 'bloom' )
+						: esc_html__( 'Not Authorized', 'bloom' ),
+					$this->is_authorized( $account_info )
+						? 'check'
+						: 'dot',
+					esc_html__( 'Edit account', 'bloom' )
+				);
+
+				if ( isset( $account_info['lists'] ) && ! empty( $account_info['lists'] ) ) {
+					foreach ( $account_info['lists'] as $id => $list ) {
+						$output .= sprintf( '
+							<li class="et_dashboard_lists_row">
+								<div class="et_dashboard_table_acc_name et_dashboard_table_column">%1$s</div>
+								<div class="et_dashboard_table_subscribers et_dashboard_table_column">%2$s</div>
+								<div class="et_dashboard_table_growth_rate et_dashboard_table_column">%3$s / %4$s</div>
+								<div class="et_dashboard_table_actions et_dashboard_table_column"></div>
+							</li>',
+							esc_html( $list['name'] ),
+							esc_html( $list['subscribers_count'] ),
+							isset( $list['growth_week'] ) ? esc_html( $list['growth_week'] ) : '0',
+							esc_html__( 'week', 'bloom' )
+						);
+					}
+				} else {
+					$output .= sprintf(
+						'<li class="et_dashboard_lists_row">
+							<div class="et_dashboard_table_acc_name et_dashboard_table_column">%1$s</div>
+							<div class="et_dashboard_table_subscribers et_dashboard_table_column"></div>
+							<div class="et_dashboard_table_growth_rate et_dashboard_table_column"></div>
+							<div class="et_dashboard_table_actions et_dashboard_table_column"></div>
+						</li>',
+						esc_html__( 'No lists available', 'bloom' )
+					);
+				}
+
+				$optins_count++;
+			}
+
+			echo $output;
+			echo '
+				</ul>
+			</div>';
 		}
 		echo '</div>';
 	}
@@ -2260,8 +2543,14 @@ class ET_Bloom extends ET_Dashboard {
 		}
 
 		add_filter( 'admin_body_class', array( $this, 'add_admin_body_class' ) );
+
+		et_core_load_main_fonts();
+
+		if ( is_rtl() ) {
+			wp_enqueue_style( 'et-bloom-rtl-css', ET_BLOOM_PLUGIN_URI . '/css/admin-rtl.css', array(), $this->plugin_version );
+		}
+
 		wp_enqueue_script( 'et_bloom-uniform-js', ET_BLOOM_PLUGIN_URI . '/js/jquery.uniform.min.js', array( 'jquery' ), $this->plugin_version, true );
-		wp_enqueue_style( 'et-open-sans-700', "{$this->protocol}://fonts.googleapis.com/css?family=Open+Sans:700", array(), $this->plugin_version );
 		wp_enqueue_style( 'et-bloom-css', ET_BLOOM_PLUGIN_URI . '/css/admin.css', array(), $this->plugin_version );
 		wp_enqueue_style( 'et_bloom-preview-css', ET_BLOOM_PLUGIN_URI . '/css/style.css', array(), $this->plugin_version );
 		wp_enqueue_script( 'et-bloom-js', ET_BLOOM_PLUGIN_URI . '/js/admin.js', array( 'jquery' ), $this->plugin_version, true );
@@ -2294,7 +2583,9 @@ class ET_Bloom extends ET_Dashboard {
 			'save_inactive_button' => esc_html__( 'Save As Inactive', 'bloom' ),
 			'cannot_activate_text' => esc_html__( 'You Have Not Added An Email List. Before your opt-in can be activated, you must first add an account and select an email list.', 'bloom' ),
 			'save_settings'        => wp_create_nonce( 'save_settings' ),
-			'updates_tab'    => wp_create_nonce( 'updates_tab' )
+			'updates_tab'          => wp_create_nonce( 'updates_tab' ),
+			'all_optins_list'      => json_encode( $this->get_all_optins_list() ),
+			'last_record_date'     => sanitize_text_field( $this->get_last_record_date() ),
 		) );
 	}
 
@@ -2545,7 +2836,7 @@ class ET_Bloom extends ET_Dashboard {
 		$optins_set = explode( '#', $optins_set );
 		foreach ( $optins_set as $optin_id ) {
 			if ( $parent_id != $optin_id ) {
-				$this->perform_optin_removal( $optin_id, false, '', '', false );
+				$this->remove_optin_or_account( $optin_id, false, '', '', false );
 			}
 		}
 
@@ -2561,23 +2852,19 @@ class ET_Bloom extends ET_Dashboard {
 			die( -1 );
 		}
 
-		global $wpdb;
-
-		$table_name = $wpdb->prefix . 'et_bloom_stats';
-
 		$optin_id  = sanitize_text_field( $optin_id );
 		$winner_id = sanitize_text_field( $winner_id );
 
 		$this->remove_optin_from_db( $optin_id );
 
-		$sql = "UPDATE $table_name SET optin_id = %s WHERE optin_id = %s AND removed_flag <> 1";
+		$sql = "UPDATE __table_name__ SET optin_id = %s WHERE optin_id = %s AND removed_flag <> 1";
 
 		$sql_args = array(
 			$optin_id,
 			$winner_id
 		);
 
-		$wpdb->query( $wpdb->prepare( $sql, $sql_args ) );
+		$this->perform_stats_sql_request( $sql, 'query', $sql_args );
 	}
 
 	/**
@@ -2627,108 +2914,94 @@ class ET_Bloom extends ET_Dashboard {
 	 * Handles optin/account removal function called via jQuery
 	 */
 	function remove_optin() {
-		if ( ! wp_verify_nonce( $_POST['remove_option_nonce'] , 'remove_option' ) ) {
-			die( -1 );
-		}
-
-		if ( ! current_user_can( 'manage_options' ) ) {
-			die( -1 );
-		}
+		et_core_security_check( 'manage_options', 'remove_option' );
 
 		$optin_id = ! empty( $_POST['remove_optin_id'] ) ? sanitize_text_field( $_POST['remove_optin_id'] ) : '';
 		$is_account = ! empty( $_POST['is_account'] ) ? sanitize_text_field( $_POST['is_account'] ) : '';
 		$service = ! empty( $_POST['service'] ) ? sanitize_text_field( $_POST['service'] ) : '';
 		$parent_id = ! empty( $_POST['parent_id'] ) ? sanitize_text_field( $_POST['parent_id'] ) : '';
 
-		$this->perform_optin_removal( $optin_id, $is_account, $service, $parent_id );
+		$this->remove_optin_or_account( $optin_id, $is_account, $service, $parent_id );
 
 		die();
 	}
 
 	/**
 	 * Performs removal of optin or account. Can remove parent optin, child optin or account
+	 *
+	 * @param string $id_or_name   The optin id or account name.
+	 * @param bool   $is_account   Whether or not an account removal is being requested.
+	 * @param string $service      The name of the provider (if we're removing an account).
+	 * @param string $parent_id    The parent optin id.
+	 * @param bool   $remove_child Whether or not a child optin removal is being requested.
+	 *
 	 * @return void
 	 */
-	function perform_optin_removal( $optin_id, $is_account = false, $service = '', $parent_id = '', $remove_child = true ) {
-		if ( ! current_user_can( 'manage_options' ) ) {
-			die( -1 );
+	function remove_optin_or_account( $id_or_name, $is_account = false, $service = '', $parent_id = '', $remove_child = true ) {
+		et_core_security_check();
+
+		if ( '' === $id_or_name || ( 'true' === $is_account && '' === $service ) ) {
+			return;
 		}
 
 		$options_array = ET_Bloom::get_bloom_options();
 
-		if ( '' !== $optin_id ) {
-			if ( 'true' == $is_account ) {
-				if ( '' !== $service ) {
-					if ( isset( $options_array['accounts'][$service][$optin_id] ) ){
-						unset( $options_array['accounts'][$service][$optin_id] );
+		if ( 'true' === $is_account && $this->providers->account_exists( $service, $id_or_name ) ) {
+			$this->providers->remove_account( $service, $id_or_name );
+			$this->reset_optins_for_provider_account( $service, $id_or_name );
+		} else if ( 'true' !== $is_account ) {
+			if ( '' !== $parent_id ) {
+				$updated_array[ $parent_id ] = $options_array[ $parent_id ];
+				$new_child_optins = array();
 
-						foreach ( $options_array as $id => $details ) {
-							if ( 'accounts' !== $id ) {
-								if ( $optin_id == $details['account_name'] ) {
-									$options_array[$id]['email_provider'] = 'empty';
-									$options_array[$id]['account_name'] = 'empty';
-									$options_array[$id]['email_list'] = 'empty';
-									$options_array[$id]['optin_status'] = 'inactive';
-								}
-							}
-						}
-
-						ET_Bloom::update_option( $options_array );
-					}
-				}
-			} else {
-				if ( '' != $parent_id ) {
-					$updated_array[$parent_id] = $options_array[$parent_id];
-					$new_child_optins = array();
-
-					foreach( $updated_array[$parent_id]['child_optins'] as $child ) {
-						if ( $child != $optin_id ) {
-							$new_child_optins[] = $child;
-						}
-					}
-
-					$updated_array[$parent_id]['child_optins'] = $new_child_optins;
-
-					// change test status to 'inactive' if there is no child options after removal.
-					if ( empty( $new_child_optins ) ) {
-						$updated_array[$parent_id]['test_status'] = 'inactive';
-					}
-
-					ET_Bloom::update_option( $updated_array );
-				} else {
-					if ( ! empty( $options_array[$optin_id]['child_optins'] ) && true == $remove_child ) {
-						foreach( $options_array[$optin_id]['child_optins'] as $single_optin ) {
-							ET_Bloom::remove_option( $single_optin );
-							$this->remove_optin_from_db( $single_optin );
-						}
+				foreach( $updated_array[ $parent_id ]['child_optins'] as $child ) {
+					if ( $child !== $id_or_name ) {
+						$new_child_optins[] = $child;
 					}
 				}
 
-				ET_Bloom::remove_option( $optin_id );
-				$this->remove_optin_from_db( $optin_id );
+				$updated_array[ $parent_id ]['child_optins'] = $new_child_optins;
+
+				// change test status to 'inactive' if there is no child options after removal.
+				if ( empty( $new_child_optins ) ) {
+					$updated_array[ $parent_id ]['test_status'] = 'inactive';
+				}
+
+				ET_Bloom::update_option( $updated_array );
+			} else if ( true == $remove_child && ! empty( $options_array[ $id_or_name ]['child_optins'] ) ) {
+				foreach( $options_array[ $id_or_name ]['child_optins'] as $single_optin ) {
+					ET_Bloom::remove_option( $single_optin );
+					$this->remove_optin_from_db( $single_optin );
+				}
 			}
+
+			ET_Bloom::remove_option( $id_or_name );
+			$this->remove_optin_from_db( $id_or_name );
 		}
 	}
 
 	/**
-	 * Remove the optin data from stats tabel.
+	 * Remove the optin data from stats table.
 	 */
 	function remove_optin_from_db( $optin_id ) {
 		if ( '' !== $optin_id ) {
-			global $wpdb;
-
-			$table_name = $wpdb->prefix . 'et_bloom_stats';
-
 			$optin_id = sanitize_text_field( $optin_id );
 
 			// construct sql query to mark removed options as removed in stats DB
-			$sql = "DELETE FROM $table_name WHERE optin_id = %s";
+			$sql = "DELETE FROM __table_name__ WHERE optin_id = %s";
 
 			$sql_args = array(
 				$optin_id,
 			);
 
-			$wpdb->query( $wpdb->prepare( $sql, $sql_args ) );
+			$this->perform_stats_sql_request( $sql, 'query', $sql_args );
+
+			// remove the cache for this optin if exists
+			$stats_cache = get_option( 'et_bloom_stats_optin_cache', array() );
+			if ( ! empty( $stats_cache ) && isset( $stats_cache['optins_cache'] ) && isset( $stats_cache['optins_cache'][ $optin_id ] ) ) {
+				unset( $stats_cache['optins_cache'][ $optin_id ] );
+				update_option( 'et_bloom_stats_optin_cache', $stats_cache );
+			}
 		}
 	}
 
@@ -2763,19 +3036,14 @@ class ET_Bloom extends ET_Dashboard {
 	 * Updates the account details in DB.
 	 * @return void
 	 */
-	function update_account( $service, $name, $data_array = array() ) {
-		if ( '' !== $service && '' !== $name ) {
-			$name = str_replace( array( '"', "'" ), '', stripslashes( $name ) );
-			$name = sanitize_text_field( $name );
-
-			$options_array = ET_Bloom::get_bloom_options();
-			$new_account['accounts'] = isset( $options_array['accounts'] ) ? $options_array['accounts'] : array();
-			$new_account['accounts'][$service][$name] = isset( $new_account['accounts'][$service][$name] )
-				? array_merge( $new_account['accounts'][$service][$name], $data_array )
-				: $data_array;
-
-			ET_Bloom::update_option( $new_account );
+	function update_account( $service = '', $name = '', $data_array = array() ) {
+		if ( '' === $service || '' === $name ) {
+			return;
 		}
+
+		$name = str_replace( array( '"', "'" ), '', stripslashes( $name ) );
+
+		$this->providers->update_account( $service, $name, $data_array );
 	}
 
 	/**
@@ -2783,332 +3051,149 @@ class ET_Bloom extends ET_Dashboard {
 	 * In case of errors adds record to WP log
 	 */
 	function perform_auto_refresh() {
-		$options_array = ET_Bloom::get_bloom_options();
-		if ( isset( $options_array['accounts'] ) ) {
-			foreach ( $options_array['accounts'] as $service => $account ) {
-				foreach ( $account as $name => $details ) {
-					if ( 'true' == $details['is_authorized'] ) {
-						$provider = ET_Bloom_Email_Providers::get_provider( $service );
-						if ( $provider ) {
-							$error_message = $provider->fetch_lists( $details );
-						}
+		$all_accounts = $this->_get_accounts();
 
-						switch ( $service ) {
-							case 'mailchimp' :
-								$error_message = $this->get_mailchimp_lists( $details['api_key'], $name );
-							break;
+		foreach ( $all_accounts as $service => $account ) {
+			foreach ( $account as $name => $details ) {
+				$result = '';
+				$error_message = '';
 
-							case 'constant_contact' :
-								$error_message = $this->get_constant_contact_lists( $details['api_key'], $details['token'], $name );
-							break;
+				if ( $this->is_authorized( $details ) ) {
 
-							case 'madmimi' :
-								$error_message = $this->get_madmimi_lists( $details['username'], $details['api_key'], $name );
-							break;
+					if ( $provider = $this->_get_provider( $service, $name ) ) {
+						$error_message = $provider->fetch_subscriber_lists();
 
-							case 'icontact' :
-								$error_message = $this->get_icontact_lists( $details['client_id'], $details['username'], $details['password'], $name );
-							break;
-
-							case 'getresponse' :
-								$error_message = $this->get_getresponse_lists( $details['api_key'], $name );
-							break;
-
-							case 'sendinblue' :
-								$error_message = $this->get_sendinblue_lists( $details['api_key'], $name );
-							break;
-
-							case 'mailpoet' :
-								$error_message = $this->get_mailpoet_lists( $name );
-							break;
-
-							case 'aweber' :
-								$error_message = $this->get_aweber_lists( $details['api_key'], $name );
-							break;
-
-							case 'campaign_monitor' :
-								$error_message = $this->get_campaign_monitor_lists( $details['api_key'], $name );
-							break;
-
-							case 'ontraport' :
-								$error_message = $this->get_ontraport_lists( $details['api_key'], $details['client_id'], $name );
-							break;
-
-							case 'feedblitz' :
-								$error_message = $this->get_feedblitz_lists( $details['api_key'], $name );
-							break;
-
-							case 'infusionsoft' :
-								$error_message = $this->get_infusionsoft_lists( $details['client_id'], $details['api_key'], $name );
-							break;
-
-							case 'hubspot' :
-								$error_message = $this->get_hubspot_lists( $details['api_key'], $name );
-							break;
+						if ( is_array( $error_message ) && isset( $error_message['need_counts_update'] ) ) {
+							$provider->retrieve_subscribers_count();
 						}
 					}
+				}
 
-					$result = 'success' == $error_message
-						? ''
-						: 'bloom_error: ' . $service . ' ' . $name . ' ' . esc_html__( 'Authorization failed: ', 'bloom' ) . $error_message;
+				if ( 'success' !== $error_message ) {
+					$result = 'bloom_error: ' . $service . ' ' . $name . ' ' . esc_html__( 'Authorization failed: ', 'bloom' ) . $error_message;
+				}
 
-					// Log errors into WP log for troubleshooting
-					if ( '' !== $result ) {
-						error_log( $result );
-					}
+				// Log errors into WP log for troubleshooting
+				if ( '' !== $result ) {
+					ET_Core_Logger::error( $result );
 				}
 			}
 		}
 	}
 
-	/**
-	 * Handles accounts authorization. Basically just executes specific function based on service and returns error message.
-	 * Supports authorization of new accounts and re-authorization of existing accounts.
-	 * @return string
-	 */
-	function authorize_account() {
-		if ( ! wp_verify_nonce( $_POST['get_lists_nonce'] , 'get_lists' ) ) {
-			die( -1 );
+	public function authorize_account() {
+		et_core_security_check( 'manage_options', 'get_lists' );
+
+		$service      = empty( $_POST['bloom_upd_service'] ) ? '' : sanitize_text_field( $_POST['bloom_upd_service'] );
+		$account_name = empty( $_POST['bloom_upd_name'] ) ? '' : sanitize_text_field( $_POST['bloom_upd_name'] );
+
+		if ( '' === $service || '' === $account_name ) {
+			return;
 		}
 
-		if ( ! current_user_can( 'manage_options' ) ) {
-			die( -1 );
+		$provider = $this->_get_provider( $service, $account_name );
+
+		if ( ! $provider ) {
+			// New wrapper class not yet implemented for this provider. Returning to legacy handler.
+			return;
 		}
 
-		$service = ! empty( $_POST['bloom_upd_service'] ) ? sanitize_text_field( $_POST['bloom_upd_service'] ) : '';
-		$name = ! empty( $_POST['bloom_upd_name'] ) ? sanitize_text_field( $_POST['bloom_upd_name'] ) : '';
-		$update_existing = ! empty( $_POST['bloom_account_exists'] ) ? sanitize_text_field( $_POST['bloom_account_exists'] ) : '';
+		foreach ( $provider->get_account_fields() as $field_name => $field_info ) {
+			$post_field_name  = "{$field_name}_{$service}";
+			$post_field_value = ! empty( $_POST[ $post_field_name ] ) ? sanitize_text_field( $_POST[ $post_field_name ] ) : '';
 
-		if ( 'true' == $update_existing ) {
-			$options_array = ET_Bloom::get_bloom_options();
-			$accounts_data = $options_array['accounts'];
-
-			$api_key = ! empty( $accounts_data[$service][$name]['api_key'] ) ? sanitize_text_field( $accounts_data[$service][$name]['api_key'] ) : '';
-			$token = ! empty( $accounts_data[$service][$name]['token'] ) ? sanitize_text_field( $accounts_data[$service][$name]['token'] ) : '';
-			$app_id = ! empty( $accounts_data[$service][$name]['client_id'] ) ? sanitize_text_field( $accounts_data[$service][$name]['client_id'] ) : '';
-			$organization_id = ! empty( $accounts_data[$service][$name]['organization_id'] ) ? sanitize_text_field( $accounts_data[$service][$name]['organization_id'] ) : '';
-			$username = ! empty( $accounts_data[$service][$name]['username'] ) ? sanitize_text_field( $accounts_data[$service][$name]['username'] ) : '';
-			$password = ! empty( $accounts_data[$service][$name]['password'] ) ? sanitize_text_field( $accounts_data[$service][$name]['password'] ) : '';
-		} else {
-			$api_key = ! empty( $_POST['bloom_api_key'] ) ? sanitize_text_field( $_POST['bloom_api_key'] ) : '';
-			$token = ! empty( $_POST['bloom_constant_token'] ) ? sanitize_text_field( $_POST['bloom_constant_token'] ) : '';
-			$app_id = ! empty( $_POST['bloom_client_id'] ) ? sanitize_text_field( $_POST['bloom_client_id'] ) : '';
-			$organization_id = ! empty( $_POST['bloom_organization_id'] ) ? sanitize_text_field( $_POST['bloom_organization_id'] ) : '';
-			$username = ! empty( $_POST['bloom_username'] ) ? sanitize_text_field( $_POST['bloom_username'] ) : '';
-			$password = ! empty( $_POST['bloom_password'] ) ? sanitize_text_field( $_POST['bloom_password'] ) : '';
-		}
-
-		$error_message = '';
-
-		$provider = ET_Bloom_Email_Providers::get_provider( $service );
-		if ( $provider ) {
-			$args = array(
-				'name' => $name,
-			);
-
-			foreach ( $provider->get_fields() as $field_name => $field ) {
-				if ( 'true' == $update_existing ) {
-					$field_value = ! empty( $accounts_data[ $service ][ $name ][ $field_name ] ) ? sanitize_text_field( $accounts_data[ $service ][ $name ][ $field_name ] ) : '';
-				} else {
-					$post_field_name = $field_name . '_' .$provider->slug;
-					$field_value = ! empty( $_POST[ $post_field_name ] ) ? sanitize_text_field( $_POST[ $post_field_name ] ) : '';
-				}
-
-				$args[ $field_name ] = $field_value;
+			if ( '' === $post_field_value ) {
+				$post_field_name  = "bloom_{$field_name}";
+				$post_field_value = ! empty( $_POST[ $post_field_name ] ) ? sanitize_text_field( $_POST[ $post_field_name ] ) : '';
 			}
 
-			$error_message = $provider->fetch_lists( $args );
+			if ( '' !== $post_field_value && ( ! isset( $provider->data[ $field_name ] ) || $post_field_value !== $provider->data[ $field_name ] ) ) {
+				$provider->data[ $field_name ] = $post_field_value;
+			}
 		}
 
-		switch ( $service ) {
-			case 'mailchimp' :
-				$error_message = $this->get_mailchimp_lists( $api_key, $name );
-			break;
+		$error_message = $provider->fetch_subscriber_lists();
 
-			case 'constant_contact' :
-				$error_message = $this->get_constant_contact_lists( $api_key, $token, $name );
-			break;
+		if ( is_array( $error_message ) ) {
+			// perform subscriber counts update after authorization if needed
+			if ( isset( $error_message['need_counts_update'] ) ) {
+				$result = $error_message;
+				$result['next_action'] = 'bloom_retrieve_counts';
+				$result['service'] = $service;
+				$result['name'] = $account_name;
 
-			case 'madmimi' :
-				$error_message = $this->get_madmimi_lists( $username, $api_key, $name );
-			break;
+				die( json_encode( $result ) );
+			}
 
-			case 'icontact' :
-				$error_message = $this->get_icontact_lists( $app_id, $username, $password, $name );
-			break;
-
-			case 'getresponse' :
-				$error_message = $this->get_getresponse_lists( $api_key, $name );
-			break;
-
-			case 'sendinblue' :
-				$error_message = $this->get_sendinblue_lists( $api_key, $name );
-			break;
-
-			case 'mailpoet' :
-				$error_message = $this->get_mailpoet_lists( $name );
-			break;
-
-			case 'aweber' :
-				$error_message = $this->get_aweber_lists( $api_key, $name );
-			break;
-
-			case 'campaign_monitor' :
-				$error_message = $this->get_campaign_monitor_lists( $api_key, $name );
-			break;
-
-			case 'ontraport' :
-				$error_message = $this->get_ontraport_lists( $api_key, $app_id, $name );
-			break;
-
-			case 'feedblitz' :
-				$error_message = $this->get_feedblitz_lists( $api_key, $name );
-			break;
-
-			case 'infusionsoft' :
-				$error_message = $this->get_infusionsoft_lists( $app_id, $api_key, $name );
-			break;
-
-			case 'salesforce':
-				$error_message = $this->save_salesforce_organization_data( $organization_id, $name );
-				break;
-
-			case 'hubspot' :
-				$error_message = $this->get_hubspot_lists( $api_key, $name );
-			break;
+			// Provider uses OAuth2, return the redirect url to the client.
+			die( json_encode( $error_message ) );
 		}
 
-		$result = 'success' == $error_message ?
-			$error_message
-			: esc_html__( 'Authorization failed: ', 'bloom' ) . $error_message;
+		if ( 'success' === $error_message ) {
+			foreach ( (array) $provider->data['lists'] as $list_id => $list_details ) {
+				$provider->data['lists'][ $list_id ]['growth_week'] = $this->calculate_growth_rate( "{$service}_{$list_id}" );
+			}
 
-		die( esc_html( $result ) );
+			$provider->save_data();
+		}
+
+		$result = 'success' === $error_message
+			? $error_message
+			: esc_html__( 'Authorization failed: ', 'bloom' ) . esc_html( $error_message );
+
+		die( json_encode( $result ) );
 	}
 
-	/**
-	 * Handles subscribe action and sends the success or error message to jQuery.
-	 */
-	function subscribe() {
-		if ( ! wp_verify_nonce( $_POST['subscribe_nonce'] , 'subscribe' ) ) {
-			die( -1 );
+	function et_bloom_retrieve_counts() {
+		et_core_security_check( 'manage_options', 'get_lists' );
+
+		$service      = empty( $_POST['bloom_service'] ) ? '' : sanitize_text_field( $_POST['bloom_service'] );
+		$account_name = empty( $_POST['bloom_name'] ) ? '' : sanitize_text_field( $_POST['bloom_name'] );
+
+		$provider = $this->_get_provider( $service, $account_name );
+
+		if ( ! $provider ) {
+			// New wrapper class not yet implemented for this provider. Returning to legacy handler.
+			return;
 		}
 
-		$subscribe_data_json = str_replace( '\\', '' ,  $_POST[ 'subscribe_data_array' ] );
+		$provider->retrieve_subscribers_count();
+	}
+
+	public function subscribe() {
+		et_core_security_check( '', 'subscribe' );
+
+		$subscribe_data_json  = str_replace( '\\', '', $_POST['subscribe_data_array'] );
 		$subscribe_data_array = json_decode( $subscribe_data_json, true );
 
-		$service = sanitize_text_field( $subscribe_data_array['service'] );
+		$service      = sanitize_text_field( $subscribe_data_array['service'] );
 		$account_name = sanitize_text_field( $subscribe_data_array['account_name'] );
-		$name = isset( $subscribe_data_array['name'] ) ? sanitize_text_field( $subscribe_data_array['name'] ) : '';
-		$last_name = isset( $subscribe_data_array['last_name'] ) ? sanitize_text_field( $subscribe_data_array['last_name'] ) : '';
-		$dbl_optin = isset( $subscribe_data_array['dbl_optin'] ) ? sanitize_text_field( $subscribe_data_array['dbl_optin'] ) : '';
-		$email = sanitize_email( $subscribe_data_array['email'] );
-		$list_id = sanitize_text_field( $subscribe_data_array['list_id'] );
-		$page_id = sanitize_text_field( $subscribe_data_array['page_id'] );
-		$optin_id = sanitize_text_field( $subscribe_data_array['optin_id'] );
-		$result = '';
+		$list_id      = sanitize_text_field( $subscribe_data_array['list_id'] );
+		$page_id      = sanitize_text_field( $subscribe_data_array['page_id'] );
+		$optin_id     = sanitize_text_field( $subscribe_data_array['optin_id'] );
+		$email        = sanitize_email( $subscribe_data_array['email'] );
+		$error        = array( 'error' => esc_html__( 'Invalid input. Please try again.', 'bloom' ) );
 
-		if ( is_email( $email ) ) {
-			$options_array = ET_Bloom::get_bloom_options();
-
-			$provider = ET_Bloom_Email_Providers::get_provider( $service );
-			if ( $provider ) {
-				$args = array(
-					'list_id'   => $list_id,
-					'email'     => $email,
-					'name'      => $name,
-					'last_name' => $last_name,
-				);
-
-				foreach ( $provider->get_fields() as $field_name => $field ) {
-					$field_value = ! empty( $options_array['accounts'][ $service ][ $account_name ][ $field_name ] ) ? $options_array['accounts'][ $service ][ $account_name ][ $field_name ] : '';
-					$args[ $field_name ] = sanitize_text_field( $field_value );
-				}
-
-				$error_message = $provider->add_subscriber( $args );
-			}
-
-			switch ( $service ) {
-				case 'mailchimp' :
-					$api_key = sanitize_text_field( $options_array['accounts'][$service][$account_name]['api_key'] );
-					$error_message = $this->subscribe_mailchimp( $api_key, $list_id, $email, $name, $last_name, $dbl_optin );
-					break;
-
-				case 'constant_contact' :
-					$api_key = sanitize_text_field( $options_array['accounts'][$service][$account_name]['api_key'] );
-					$token = sanitize_text_field( $options_array['accounts'][$service][$account_name]['token'] );
-					$error_message = $this->subscribe_constant_contact( $email, $api_key, $token, $list_id, $name, $last_name );
-					break;
-
-				case 'madmimi' :
-					$api_key = sanitize_text_field( $options_array['accounts'][$service][$account_name]['api_key'] );
-					$username = sanitize_text_field( $options_array['accounts'][$service][$account_name]['username'] );
-					$error_message = $this->subscribe_madmimi( $username, $api_key, $list_id, $email, $name, $last_name );
-					break;
-
-				case 'icontact' :
-					$app_id = sanitize_text_field( $options_array['accounts'][$service][$account_name]['client_id'] );
-					$username = sanitize_text_field( $options_array['accounts'][$service][$account_name]['username'] );
-					$password = sanitize_text_field( $options_array['accounts'][$service][$account_name]['password'] );
-					$folder_id = sanitize_text_field( $options_array['accounts'][$service][$account_name]['lists'][$list_id]['folder_id'] );
-					$account_id = sanitize_text_field( $options_array['accounts'][$service][$account_name]['lists'][$list_id]['account_id'] );
-					$error_message = $this->subscribe_icontact( $app_id, $username, $password, $folder_id, $account_id, $list_id, $email, $name, $last_name );
-					break;
-
-				case 'getresponse' :
-					$api_key = sanitize_text_field( $options_array['accounts'][$service][$account_name]['api_key'] );
-					$error_message = $this->subscribe_get_response( $list_id, $email, $api_key, $name );
-					break;
-
-				case 'sendinblue' :
-					$api_key = sanitize_text_field( $options_array['accounts'][$service][$account_name]['api_key'] );
-					$error_message = $this->subscribe_sendinblue( $api_key, $email, $list_id, $name, $last_name );
-					break;
-
-				case 'mailpoet' :
-					$error_message = $this->subscribe_mailpoet( $list_id, $email, $name, $last_name );
-					break;
-
-				case 'aweber' :
-					$error_message = $this->subscribe_aweber( $list_id, $account_name, $email, $name );
-					break;
-
-				case 'campaign_monitor' :
-					$api_key = sanitize_text_field( $options_array['accounts'][$service][$account_name]['api_key'] );
-					$error_message = $this->subscribe_campaign_monitor( $api_key, $email, $list_id, $name );
-					break;
-
-				case 'ontraport' :
-					$app_id = sanitize_text_field( $options_array['accounts'][$service][$account_name]['client_id'] );
-					$api_key = sanitize_text_field( $options_array['accounts'][$service][$account_name]['api_key'] );
-					$error_message = $this->subscribe_ontraport( $app_id, $api_key, $name, $email, $list_id, $last_name );
-					break;
-
-				case 'feedblitz' :
-					$api_key = sanitize_text_field( $options_array['accounts'][$service][$account_name]['api_key'] );
-					$error_message = $this->subscribe_feedblitz( $api_key, $list_id, $name, $email, $last_name );
-					break;
-
-				case 'infusionsoft' :
-					$api_key = sanitize_text_field( $options_array['accounts'][$service][$account_name]['api_key'] );
-					$app_id = sanitize_text_field( $options_array['accounts'][$service][$account_name]['client_id'] );
-					$error_message = $this->subscribe_infusionsoft( $api_key, $app_id, $list_id, $email, $name, $last_name );
-					break;
-
-				case 'salesforce':
-					$error_message = $this->subscribe_salesforce( $options_array['accounts'][$service][$account_name]['organization_id'], $email, $name, $last_name );
-					break;
-
-				case 'hubspot' :
-					$api_key       = sanitize_text_field( $options_array['accounts'][ $service ][ $account_name ]['api_key'] );
-					$error_message = $this->subscribe_hubspot( $api_key, $list_id, $email, $name, $last_name );
-					break;
-			}
-		} else {
-			$error_message = esc_html__( 'Invalid email', 'bloom' );
+		if ( empty( $service ) || empty( $account_name ) ) {
+			die( json_encode( $error ) );
 		}
 
-		if ( 'success' == $error_message ) {
-			ET_Bloom::add_stats_record( 'con', $optin_id, $page_id, $service . '_' . $list_id );
+		// check the email before further processing
+		if ( ! is_email( $email ) ) {
+			die( json_encode( array( 'error' => esc_html__( 'Invalid email', 'bloom' ) ) ) );
+		}
+
+		$provider = $this->_get_provider( $service, $account_name );
+
+		if ( false === $provider ) {
+			// New wrapper class not yet implemented for this provider. Returning to legacy handler.
+			return;
+		}
+
+		$error_message = $provider->subscribe( $subscribe_data_array );
+
+		if ( 'success' === $error_message ) {
+			ET_Bloom::add_stats_record( 'con', $optin_id, $page_id, "{$service}_{$list_id}" );
 			$result = json_encode( array( 'success' => $error_message ) );
 		} else {
 			$result = json_encode( array( 'error' => esc_html( $error_message ) ) );
@@ -3118,1830 +3203,21 @@ class ET_Bloom extends ET_Dashboard {
 	}
 
 	/**
-	 * Retrieves the lists via Infusionsoft API and updates the data in DB.
-	 * @return string
-	 */
-
-	function get_infusionsoft_lists( $app_id, $api_key, $name ) {
-		if ( ! function_exists( 'curl_init' ) ) {
-			return esc_html__( 'curl_init is not defined ', 'bloom' );
-		}
-
-		if ( ! class_exists( 'ET_Infusionsoft' ) ) {
-			require_once( ET_BLOOM_PLUGIN_DIR . 'subscription/infusionsoft/et_infusionsoft_api.php' );
-		}
-
-		$lists = array();
-
-		$infusion_app = new ET_Infusionsoft( $api_key, $app_id );
-		$error_message = $infusion_app->connection_check();
-
-		if ( empty( $error_message ) ) {
-			$need_request = true;
-			$page = 0;
-			$all_lists = array();
-
-			while ( true == $need_request ) {
-				$error_message = 'success';
-				$lists_data = $infusion_app->database_query( 'ContactGroup', 1000, $page, array( 'Id' => '%' ), array( 'Id', 'GroupName' ) );
-				$all_lists = array_merge( $all_lists, (array) $lists_data['array']->data );
-				if ( 1000 > count( (array) $lists_data['array']->data ) ) {
-					$need_request = false;
-				} else {
-					$page++;
-				}
-			}
-		}
-
-		if ( ! empty( $all_lists['value'] ) ) {
-			foreach( $all_lists['value'] as $list ) {
-				$list_id = (string) $list->struct->member[1]->value->i4;
-				$list_name = $list->struct->member[0]->value;
-				$group_query = '%' . $list_id . '%';
-				$subscribers_count = $infusion_app->database_count( 'Contact', array( 'Groups' => $group_query ) );
-				$lists[ $list_id ]['name'] = sanitize_text_field( $list_name );
-				$lists[ $list_id ]['subscribers_count'] = sanitize_text_field( $subscribers_count['i4'] );
-				$lists[ $list_id ]['growth_week'] = sanitize_text_field( $this->calculate_growth_rate( 'infusionsoft_' . $list_id ) );
-			}
-
-			$this->update_account( 'infusionsoft', sanitize_text_field( $name ), array(
-				'lists'         => $lists,
-				'api_key'       => sanitize_text_field( $api_key ),
-				'client_id'     => sanitize_text_field( $app_id ),
-				'is_authorized' => 'true',
-			) );
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Subscribes to Infusionsoft list. Returns either "success" string or error message.
-	 * @return string
-	 */
-	function subscribe_infusionsoft( $api_key, $app_id, $list_id, $email, $name = '', $last_name = '' ) {
-		if ( ! function_exists( 'curl_init' ) ) {
-			return esc_html__( 'curl_init is not defined ', 'bloom' );
-		}
-
-		if ( ! class_exists( 'ET_Infusionsoft' ) ) {
-			require_once( ET_BLOOM_PLUGIN_DIR . 'subscription/infusionsoft/et_infusionsoft_api.php' );
-		}
-
-		$infusion_app = new ET_Infusionsoft( $api_key, $app_id );
-		$error_message = $infusion_app->connection_check();
-
-		if ( empty( $error_message ) ) {
-			$contact_data = $infusion_app->database_query( 'Contact', 1, 0, array( 'Email' => $email ), array( 'Id', 'Groups' ) );
-			$found_contact = isset( $contact_data['array']->data->value->struct->member ) ? $contact_data['array']->data->value->struct->member : array();
-			if ( 0 < count( $found_contact ) ) {
-				if ( false === strpos( $found_contact[0]->value, $list_id ) ) {
-					$infusion_app->add_to_list( $found_contact[1]->value->i4, $list_id );
-					$error_message = 'success';
-				} else {
-					$error_message = esc_html__( 'Already subscribed', 'bloom' );
-				}
-			} else {
-				$contact_details = array(
-					'FirstName' => $name,
-					'LastName'  => $last_name,
-					'Email'     => $email,
-				);
-
-				$new_contact_id = $infusion_app->add_contact( $contact_details );
-				$infusion_app->add_to_list( $new_contact_id, $list_id );
-				$infusion_app->opt_in_email( $email, esc_html__( 'Subscribed via Bloom', 'bloom' ) );
-
-				$error_message = 'success';
-			}
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Save SalesForce Organization ID for web-to-lead
-	 * @return string
-	 */
-	function save_salesforce_organization_data( $organization_id, $name ) {
-		if ( '' !== $organization_id ) {
-			$this->update_account( 'salesforce', sanitize_text_field( $name ), array(
-				'organization_id' => sanitize_text_field( $organization_id ),
-				'is_authorized'   => 'true',
-			) );
-
-			return 'success';
-		}
-
-		return esc_html__( 'Organization ID cannot be empty', 'bloom' );
-	}
-
-	/**
-	 * Post web-to-lead request to SalesForce
-	 * @return string
-	 */
-	function subscribe_salesforce( $account_name = '', $email, $name = '', $last_name = '' ) {
-		if ( '' === $account_name ) {
-			return esc_html__( 'Unknown Organization ID', 'bloom' );
-		}
-
-		// Define SalesForce web-to-lead endpoint
-		$url = "https://www.salesforce.com/servlet/servlet.WebToLead?encoding=UTF-8";
-
-		// Prepare arguments for web-to-lead POST
-		$args = array(
-			'body' => array(
-				'oid'    => sanitize_text_field( $account_name ),
-				'retURL' => esc_url( home_url( '/' ) ),
-				'email'  => sanitize_email( $email ),
-			),
-		);
-
-		if ( '' !== $name ) {
-			$args['body']['first_name'] = sanitize_text_field( $name );
-		}
-
-		if ( '' !== $last_name ) {
-			$args['body']['last_name'] = sanitize_text_field( $last_name );
-		}
-
-		// Post to SalesForce web-to-lead endpoint
-		$post = wp_remote_post( $url, $args );
-
-		if ( ! is_wp_error( $post ) ) {
-			return 'success';
-		}
-
-		return esc_html__( 'An error occured. Please try again', 'bloom' );
-	}
-
-	/*
-	 * Retrieves the lists via HubSpot API and updates the data in DB.
-	 * @return string
-	 */
-	function get_hubspot_lists( $api_key = '', $name = '' ) {
-		$lists = array();
-
-		$error_message = '';
-
-		$request_url = esc_url_raw(
-			sprintf(
-				'https://api.hubapi.com/contacts/v1/lists/static?count=20&hapikey=%1$s&offset=0',
-				sanitize_text_field( $api_key )
-			)
-		);
-
-		$theme_request = wp_remote_get( $request_url, array( 'timeout' => 30 ) );
-
-		$response_code = wp_remote_retrieve_response_code( $theme_request );
-
-		if ( ! is_wp_error( $theme_request ) && $response_code === 200 ) {
-			$theme_response = json_decode( wp_remote_retrieve_body( $theme_request ), true );
-			if ( ! empty( $theme_response ) ) {
-				$error_message       = 'success';
-				$received_lists_data = $theme_response['lists'];
-				$need_more_data      = isset( $theme_response['has-more'] ) && $theme_response['has-more'];
-				$start_from          = $theme_response['offset'];
-
-				// request all the lists from HubSpot API
-				while ( $need_more_data ) {
-					$additional_request_url = esc_url_raw(
-						sprintf(
-							'https://api.hubapi.com/contacts/v1/lists/static?count=20&hapikey=%1$s&offset=%2$s',
-							sanitize_text_field( $api_key ),
-							sanitize_text_field( $start_from )
-						)
-					);
-
-					$additional_theme_request = wp_remote_get( $additional_request_url, array( 'timeout' => 30 ) );
-					$additional_response_code = wp_remote_retrieve_response_code( $theme_request );
-
-					if ( ! is_wp_error( $additional_theme_request ) && $additional_response_code === 200 ) {
-						$additional_theme_response = json_decode( wp_remote_retrieve_body( $additional_theme_request ), true );
-						$need_more_data = isset( $additional_theme_response['has-more'] ) && $additional_theme_response['has-more'];
-						$start_from = $additional_theme_response['offset'];
-						$received_lists_data = array_merge( $received_lists_data, $additional_theme_response['lists'] );
-					} else {
-						$need_more_data = false;
-					}
-				}
-
-				foreach ( $received_lists_data as $list_data ) {
-					$lists[ $list_data['listId'] ]['name'] = $list_data['name'];
-					$lists[ $list_data['listId'] ]['subscribers_count'] = $list_data['metaData']['size'];
-					$lists[ $list_data['listId'] ]['growth_week'] = $this->calculate_growth_rate( 'hubspot_' . $list_data['listId'] );
-				}
-
-				$this->update_account( 'hubspot', $name, array(
-					'api_key'       => sanitize_text_field( $api_key ),
-					'lists'         => $lists,
-					'is_authorized' => 'true',
-				) );
-
-			}
-		} else {
-			if ( is_wp_error( $theme_request ) ) {
-				$error_message = $theme_request->get_error_message();
-			} else {
-				switch ( $response_code ) {
-					case '401' :
-						$error_message = esc_html__( 'Invalid API key', 'bloom' );
-						break;
-
-					default :
-						$error_message = $response_code;
-						break;
-				}
-			}
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Subscribes to HubSpot list. Returns either "success" string or error message.
-	 * @return string
-	 */
-	function subscribe_hubspot( $api_key, $list_id, $email, $name = '', $last_name = '' ) {
-		if ( ! function_exists( 'curl_init' ) ) {
-			return;
-		}
-
-		// prepare array of data to add new contact
-		$contact_data = array(
-			'properties' => array(
-				array(
-					'property' => 'email',
-					'value'    => sanitize_email( $email ),
-				),
-				array(
-					'property' => 'firstname',
-					'value'    => sanitize_text_field( $name ),
-				),
-				array(
-					'property' => 'lastname',
-					'value'    => sanitize_text_field( $last_name ),
-				),
-			),
-		);
-		$contact_data_json = json_encode( $contact_data );
-
-		$request_url = esc_url_raw(
-			sprintf(
-				'https://api.hubapi.com/contacts/v1/contact?hapikey=%1$s',
-				sanitize_text_field( $api_key )
-			)
-		);
-
-		// Get cURL resource
-		$curl = curl_init();
-
-		// Set some options
-		curl_setopt_array( $curl, array(
-			CURLOPT_POST           => true,
-			CURLOPT_URL            => $request_url,
-			CURLOPT_SSL_VERIFYPEER => FALSE, //we need this option since we perform request to https
-			CURLOPT_POSTFIELDS     => $contact_data_json,
-			CURLOPT_HTTPHEADER     => array( 'Content-Type: application/json' ),
-			CURLOPT_RETURNTRANSFER => true,
-		) );
-
-		// Send the request & save response to $resp
-		$resp = curl_exec( $curl );
-
-		// Close request to clear up some resources
-		curl_close( $curl );
-
-		$new_contact_data = json_decode( $resp, true );
-
-		if ( isset( $new_contact_data['error'] ) && 'CONTACT_EXISTS' !== $new_contact_data['error'] ) {
-			return $new_contact_data['error'];
-		}
-
-		// contact ID stored in different place if contact already exists
-		if ( isset( $new_contact_data['error'] ) && 'CONTACT_EXISTS' === $new_contact_data['error'] ) {
-			$new_contact_vid = isset( $new_contact_data['identityProfile']['vid'] ) ? $new_contact_data['identityProfile']['vid'] : '';
-		} else {
-			$new_contact_vid = isset( $new_contact_data['vid'] ) ? $new_contact_data['vid'] : '';
-		}
-
-		if ( '' === $new_contact_vid ) {
-			return esc_html__( 'You were not subscribed. Please try again later', 'bloom' );
-		}
-
-		$error_message = 'success';
-
-		// prepare data to add new contact to list
-		$contact_vids = array(
-			'vids' => array(
-				(int) sanitize_text_field( $new_contact_vid ),
-			),
-		);
-		$contact_vids_json = json_encode( $contact_vids );
-
-		$add_to_list_url = esc_url_raw(
-			sprintf(
-				'https://api.hubapi.com/contacts/v1/lists/%2$s/add?hapikey=%1$s',
-				sanitize_text_field( $api_key ),
-				$list_id
-			)
-		);
-
-		// add the contact to appropriate list
-		$theme_request = wp_remote_post( $add_to_list_url, array(
-			'timeout' => 30,
-			'headers' => array(
-				'content-type' => 'application/json',
-			),
-			'body'    => $contact_vids_json,
-		) );
-
-		return $error_message;
-	}
-
-	/**
-	 * Retrieves the lists via MailChimp API and updates the data in DB.
-	 * @return string
-	 */
-	function get_mailchimp_lists( $api_key = '', $name = '' ) {
-		$lists = array();
-
-		$error_message = '';
-
-		if ( ! function_exists( 'curl_init' ) ) {
-			return esc_html__( 'curl_init is not defined ', 'bloom' );
-		}
-
-		if ( ! class_exists( 'MailChimp_Bloom' ) ) {
-			require_once( ET_BLOOM_PLUGIN_DIR . 'subscription/mailchimp/mailchimp.php' );
-		}
-
-		if ( false === strpos( $api_key, '-' ) ) {
-			$error_message = esc_html__( 'invalid API key', 'bloom' );
-		} else {
-			$mailchimp = new MailChimp_Bloom( $api_key );
-			$lists_data = array();
-
-			// retrieve lists from Mailchimp account, set the limit = 100 ( max allowed by Mailchimp api )
-			$retval = $mailchimp->call( 'lists/list', array( 'limit' => 100 ) );
-
-			if ( ! empty( $retval ) && empty( $retval['errors'] ) ) {
-				$error_message = 'success';
-				$lists_data = $retval['data'];
-
-				// if there is more than 100 lists in account, then perform additional calls to retrieve all the lists.
-				if ( 100 < $retval['total'] ) {
-					// determine how many requests we need to retrieve all the lists
-					$total_pages = ceil( $retval['total'] / 100 );
-
-					for ( $i = 1; $i <= $total_pages; $i++ ) {
-						$retval_additional = $mailchimp->call( 'lists/list', array(
-								'limit' => 100,
-								'start' => $i,
-							)
-						);
-
-						if ( ! empty( $retval_additional ) && empty( $retval_additional['errors'] ) ) {
-							if ( ! empty( $retval_additional['data'] ) ) {
-								$lists_data = array_merge( $lists_data, $retval_additional['data'] );
-							}
-						}
-					}
-				}
-
-				if ( ! empty( $lists_data ) ) {
-					foreach ( $lists_data as $list ) {
-						$lists[$list['id']]['name'] = sanitize_text_field( $list['name'] );
-						$lists[$list['id']]['subscribers_count'] = sanitize_text_field( $list['stats']['member_count'] );
-						$lists[$list['id']]['growth_week'] = sanitize_text_field( $this->calculate_growth_rate( 'mailchimp_' . $list['id'] ) );
-					}
-				}
-				$this->update_account( 'mailchimp', sanitize_text_field( $name ), array(
-					'lists'         => $lists,
-					'api_key'       => sanitize_text_field( $api_key ),
-					'is_authorized' => 'true',
-				) );
-			} else {
-				if ( ! empty( $retval['errors'] ) ) {
-					$errors = '';
-					foreach( $retval['errors'] as $error ) {
-						$errors .= $error . ' ';
-					}
-					$error_message = $errors;
-				}
-
-				if ( '' !== $error_message ) {
-					$error_message = sprintf( '%1$s: %2$s',
-						esc_html__( 'Additional Information: ' ),
-						$error_message
-					);
-				}
-
-				$error_message = sprintf( '%1$s. %2$s',
-					esc_html__( 'An error occured during API request. Make sure API Key is correct', 'bloom' ),
-					$error_message
-				);
-			}
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Subscribes to Mailchimp list. Returns either "success" string or error message.
-	 * @return string
-	 */
-	function subscribe_mailchimp( $api_key, $list_id, $email, $name = '', $last_name = '', $disable_dbl = '' ) {
-		if ( ! function_exists( 'curl_init' ) ) {
-			return;
-		}
-
-		if ( ! class_exists( 'MailChimp_Bloom' ) ) {
-			require_once( ET_BLOOM_PLUGIN_DIR . 'subscription/mailchimp/mailchimp.php' );
-		}
-
-		$mailchimp = new MailChimp_Bloom( $api_key );
-
-		$email = array( 'email' => $email );
-		$double_optin = '' === $disable_dbl ? 'true' : 'false';
-
-		$merge_vars = array(
-			'FNAME' => $name,
-			'LNAME' => $last_name,
-		);
-
-		$retval =  $mailchimp->call( 'lists/subscribe', array(
-			'id'           => $list_id,
-			'email'        => $email,
-			'double_optin' => $double_optin,
-			'merge_vars'   => $merge_vars,
-		));
-
-		if ( isset( $retval['error'] ) ) {
-			if ( '214' == $retval['code'] ) {
-				$error_message = str_replace( 'Click here to update your profile.', '', $retval['error'] );
-			} else {
-				$error_message = $retval['error'];
-			}
-		} else {
-			$error_message = 'success';
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Retrieves the lists via Constant Contact API and updates the data in DB.
-	 * @return string
-	 */
-	function get_constant_contact_lists( $api_key, $token, $name ) {
-		$lists = array();
-
-		$request_url = esc_url_raw( 'https://api.constantcontact.com/v2/lists?api_key=' . $api_key );
-
-		$theme_request = wp_remote_get( $request_url, array(
-			'timeout' => 30,
-			'headers' => array( 'Authorization' => 'Bearer ' . $token ),
-		) );
-
-		$response_code = wp_remote_retrieve_response_code( $theme_request );
-
-		if ( ! is_wp_error( $theme_request ) && $response_code == 200 ){
-			$theme_response = wp_remote_retrieve_body( $theme_request );
-			if ( ! empty( $theme_response ) ) {
-				$error_message = 'success';
-
-				$response = json_decode( $theme_response, true );
-
-				foreach ( $response as $key => $value ) {
-					if ( isset( $value['id'] ) ) {
-						$lists[$value['id']]['name'] = sanitize_text_field( $value['name'] );
-						$lists[$value['id']]['subscribers_count'] = sanitize_text_field( $value['contact_count'] );
-						$lists[$value['id']]['growth_week'] = sanitize_text_field( $this->calculate_growth_rate( 'constant_contact_' . $value['id'] ) );
-					}
-				}
-
-				$this->update_account( 'constant_contact', sanitize_text_field( $name ), array(
-					'lists'         => $lists,
-					'api_key'       => sanitize_text_field( $api_key ),
-					'token'         => sanitize_text_field( $token ),
-					'is_authorized' => 'true',
-				) );
-			} else {
-				$error_message .= esc_html__( 'empty response', 'bloom' );
-			}
-		} else {
-			if ( is_wp_error( $theme_request ) ) {
-				$error_message = $theme_request->get_error_message();
-			} else {
-				switch ( $response_code ) {
-					case '401' :
-						$error_message = esc_html__( 'Invalid Token', 'bloom' );
-						break;
-
-					case '403' :
-						$error_message = esc_html__( 'Invalid API key', 'bloom' );
-						break;
-
-					default :
-						$error_message = $response_code;
-						break;
-				}
-			}
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Subscribes to Constant Contact list. Returns either "success" string or error message.
-	 * @return string
-	 */
-	function subscribe_constant_contact( $email, $api_key, $token, $list_id, $name = '', $last_name = '' ) {
-		$request_url = esc_url_raw( 'https://api.constantcontact.com/v2/contacts?email=' . $email . '&api_key=' . $api_key );
-		$error_message = '';
-
-		$theme_request = wp_remote_get( $request_url, array(
-			'timeout' => 30,
-			'headers' => array( 'Authorization' => 'Bearer ' . $token ),
-		) );
-		$response_code = wp_remote_retrieve_response_code( $theme_request );
-
-		if ( ! is_wp_error( $theme_request ) && $response_code == 200 ){
-			$theme_response = wp_remote_retrieve_body( $theme_request );
-			$response = json_decode( $theme_response, true );
-
-			// check whether we have current email in any list or whether contact has 'REMOVED' status
-			if ( ! empty( $response['results'][0]['lists'] ) || ( isset( $response['results'][0]['status'] ) && 'REMOVED' === $response['results'][0]['status'] ) ) {
-				$current_user_lists = '"lists":[';
-
-				// determine whether current email subscribed to current list and build the list of List ID for further update
-				if ( ! empty( $response['results'][0]['lists'] ) ) {
-					foreach( $response['results'][0]['lists'] as $list_details ) {
-						$current_user_lists .= '{"id": "' . $list_details['id'] . '"},';
-
-						if ( $list_id === $list_details['id'] ) {
-							return esc_html__( 'Already subscribed', 'bloom' );
-						}
-					}
-				}
-
-				// add current list ID into list of IDs.
-				$current_user_lists .= '{"id": "' . $list_id . '"}]';
-				$contact_id = $response['results'][0]['id'];
-
-				$request_url = esc_url_raw( 'https://api.constantcontact.com/v2/contacts/' . $contact_id . '?action_by=ACTION_BY_VISITOR&api_key=' . $api_key );
-
-				// all the contact fields will be updated during API request, so we need to pass all the info including email, name, last name and all the list IDs
-				$body_request = sprintf(
-					'{"email_addresses":[{"email_address": "%1$s" }], %2$s, "first_name": "%3$s", "last_name" : "%4$s" }',
-					sanitize_email( $email ),
-					$current_user_lists,
-					sanitize_text_field( $name ),
-					sanitize_text_field( $last_name )
-				);
-				$theme_request = wp_remote_request( $request_url, array(
-					'method' => 'PUT',
-					'timeout' => 30,
-					'headers' => array(
-						'Authorization' => 'Bearer ' . $token,
-						'content-type' => 'application/json',
-					),
-					'body' => $body_request,
-				) );
-				$response_code = wp_remote_retrieve_response_code( $theme_request );
-
-				if ( ! is_wp_error( $theme_request ) && $response_code == 200 ) {
-					$error_message = 'success';
-				} else {
-					if ( is_wp_error( $theme_request ) ) {
-						$error_message = $theme_request->get_error_message();
-					} else {
-						$error_message = $response_code;
-					}
-				}
-			} else {
-				$request_url = esc_url_raw( 'https://api.constantcontact.com/v2/contacts?action_by=ACTION_BY_VISITOR&api_key=' . $api_key );
-				$body_request = sprintf(
-					'{"email_addresses":[{"email_address": "%1$s" }], "lists":[{"id": "%2$s"}], "first_name": "%3$s", "last_name" : "%4$s" }',
-					sanitize_email( $email ),
-					esc_html( $list_id ),
-					sanitize_text_field( $name ),
-					sanitize_text_field( $last_name )
-				);
-				$theme_request = wp_remote_post( $request_url, array(
-					'timeout' => 30,
-					'headers' => array(
-						'Authorization' => 'Bearer ' . $token,
-						'content-type' => 'application/json',
-					),
-					'body' => $body_request,
-				) );
-				$response_code = wp_remote_retrieve_response_code( $theme_request );
-				if ( ! is_wp_error( $theme_request ) && $response_code == 201 ) {
-					$error_message = 'success';
-				} else {
-					if ( is_wp_error( $theme_request ) ) {
-						$error_message = $theme_request->get_error_message();
-					} else {
-						switch ( $response_code ) {
-							case '409' :
-								$error_message = esc_html__( 'Already subscribed', 'bloom' );
-								break;
-
-							default :
-								$error_message = $response_code;
-								break;
-						}
-					}
-				}
-			}
-		} else {
-			if ( is_wp_error( $theme_request ) ) {
-				$error_message = $theme_request->get_error_message();
-			} else {
-				switch ( $response_code ) {
-					case '401' :
-						$error_message = esc_html__( 'Invalid Token', 'bloom' );
-						break;
-
-					case '403' :
-						$error_message = esc_html__( 'Invalid API key', 'bloom' );
-						break;
-
-					default :
-						$error_message = $response_code;
-						break;
-				}
-			}
-		}
-
-		return $error_message;
-	}
-
-
-	/**
-	 * Retrieves the lists via Campaign Monitor API and updates the data in DB.
-	 * @return string
-	 */
-	function get_campaign_monitor_lists( $api_key, $name ) {
-		if ( ! class_exists( 'CS_REST_Clients' ) ) {
-			require_once( ET_BLOOM_PLUGIN_DIR . 'subscription/createsend-php-4.0.2/csrest_clients.php' );
-		}
-		if ( ! class_exists( 'CS_REST_Lists' ) ) {
-			require_once( ET_BLOOM_PLUGIN_DIR . 'subscription/createsend-php-4.0.2/csrest_lists.php' );
-		}
-
-		$auth = array(
-			'api_key' => $api_key,
-		);
-
-		$request_url = esc_url_raw( 'https://api.createsend.com/api/v3.1/clients.json?pretty=true' );
-		$all_clients_id = array();
-		$all_lists = array();
-
-		if ( ! function_exists( 'curl_init' ) ) {
-			return esc_html__( 'curl_init is not defined ', 'bloom' );
-		}
-
-		// Get cURL resource
-		$curl = curl_init();
-		// Set some options
-		curl_setopt_array( $curl, array(
-			CURLOPT_RETURNTRANSFER => 1,
-			CURLOPT_URL            => $request_url,
-			CURLOPT_SSL_VERIFYPEER => FALSE, //we need this option since we perform request to https
-			CURLOPT_USERPWD        => $api_key . ':x'
-		) );
-		// Send the request & save response to $resp
-		$resp = curl_exec( $curl );
-		$httpCode = curl_getinfo( $curl, CURLINFO_HTTP_CODE );
-		// Close request to clear up some resources
-		curl_close( $curl );
-
-		$clients_array = json_decode( $resp, true );
-
-		if ( '200' == $httpCode ) {
-			$error_message = 'success';
-
-			foreach( $clients_array as $client => $client_details ) {
-				$all_clients_id[] = $client_details['ClientID'];
-			}
-
-			if ( ! empty( $all_clients_id ) ) {
-				foreach( $all_clients_id as $client ) {
-					$wrap = new CS_REST_Clients( $client,  $auth );
-					$lists_data = $wrap->get_lists();
-
-					foreach ( $lists_data->response as $list => $single_list ) {
-						$all_lists[$single_list->ListID]['name'] = sanitize_text_field( $single_list->Name );
-
-						$wrap_stats = new CS_REST_Lists( $single_list->ListID, $auth );
-						$result_stats = $wrap_stats->get_stats();
-						$all_lists[$single_list->ListID]['subscribers_count'] = sanitize_text_field( $result_stats->response->TotalActiveSubscribers );
-						$all_lists[$single_list->ListID]['growth_week'] = sanitize_text_field( $this->calculate_growth_rate( 'campaign_monitor_' . $single_list->ListID ) );
-					}
-				}
-			}
-
-			$this->update_account( 'campaign_monitor', sanitize_text_field( $name ), array(
-				'api_key'       => sanitize_text_field( $api_key ),
-				'lists'         => $all_lists,
-				'is_authorized' => 'true',
-			) );
-		} else {
-			if ( '401' == $httpCode ) {
-				$error_message = esc_html__( 'invalid API key', 'bloom' );
-			} else {
-				$error_message = sanitize_text_field( $httpCode );
-			}
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Subscribes to Campaign Monitor list. Returns either "success" string or error message.
-	 * @return string
-	 */
-	function subscribe_campaign_monitor( $api_key, $email, $list_id, $name = '' ) {
-		if ( ! class_exists( 'CS_REST_Subscribers' ) ) {
-			require_once( ET_BLOOM_PLUGIN_DIR . 'subscription/createsend-php-4.0.2/csrest_subscribers.php' );
-		}
-
-		$auth = array(
-			'api_key' => $api_key,
-		);
-		$wrap = new CS_REST_Subscribers( $list_id, $auth);
-		$is_subscribed = $wrap->get( $email );
-
-		if ( $is_subscribed->was_successful() ) {
-			$error_message = esc_html__( 'Already subscribed', 'bloom' );
-		} else {
-			$result = $wrap->add( array(
-				'EmailAddress' => sanitize_email( $email ),
-				'Name'         => sanitize_text_field( $name ),
-				'Resubscribe'  => false,
-			) );
-			if( $result->was_successful() ) {
-				$error_message = 'success';
-			} else {
-				$error_message = $result->response->message;
-			}
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Retrieves the lists via Mad Mimi API and updates the data in DB.
-	 * @return string
-	 */
-	function get_madmimi_lists( $username, $api_key, $name ) {
-		$lists = array();
-
-		$name     = sanitize_text_field( $name );
-		$username = sanitize_text_field( $username );
-		$api_key  = sanitize_text_field( $api_key );
-
-		$request_url = esc_url_raw( 'https://api.madmimi.com/audience_lists/lists.json?username=' . rawurlencode( $username ) . '&api_key=' . $api_key );
-
-		$theme_request = wp_remote_get( $request_url, array( 'timeout' => 30 ) );
-
-		$response_code = wp_remote_retrieve_response_code( $theme_request );
-
-		if ( ! is_wp_error( $theme_request ) && $response_code == 200 ){
-			$theme_response = json_decode( wp_remote_retrieve_body( $theme_request ), true );
-			if ( ! empty( $theme_response ) ) {
-				$error_message = 'success';
-
-				foreach ( $theme_response as $list_data ) {
-					$lists[$list_data['id']]['name'] = $list_data['name'];
-					$lists[$list_data['id']]['subscribers_count'] = $list_data['list_size'];
-					$lists[$list_data['id']]['growth_week'] = $this->calculate_growth_rate( 'madmimi_' . $list_data['id'] );
-				}
-
-				$this->update_account( 'madmimi', $name, array(
-					'api_key' => esc_html( $api_key ),
-					'username' => esc_html( $username ),
-					'lists' => $lists,
-					'is_authorized' => esc_html( 'true' ),
-				) );
-
-			} else {
-				$error_message = esc_html__( 'Please make sure you have at least 1 list in your account and try again', 'bloom' );
-			}
-		} else {
-			if ( is_wp_error( $theme_request ) ) {
-				$error_message = $theme_request->get_error_message();
-			} else {
-				switch ( $response_code ) {
-					case '401' :
-						$error_message = esc_html__( 'Invalid Username or API key', 'bloom' );
-						break;
-
-					default :
-						$error_message = $response_code;
-						break;
-				}
-			}
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Subscribes to Mad Mimi list. Returns either "success" string or error message.
-	 * @return string
-	 */
-	function subscribe_madmimi( $username, $api_key, $list_id, $email, $name = '', $last_name = '' ) {
-		// check whether the user already subscribed
-		$check_user_url = esc_url_raw( sprintf(
-			'https://api.madmimi.com/audience_members/%1$s/lists.json?username=%2$s&api_key=%3$s',
-			rawurlencode( sanitize_email( $email ) ),
-			rawurlencode( sanitize_text_field( $username ) ),
-			sanitize_text_field( $api_key )
-		));
-
-		$check_user_request = wp_remote_get( $check_user_url, array( 'timeout' => 30 ) );
-		$check_user_response_code = wp_remote_retrieve_response_code( $check_user_request );
-
-		if ( ! is_wp_error( $check_user_request ) && $check_user_response_code == 200 ){
-			$check_user_response = json_decode( wp_remote_retrieve_body( $check_user_request ), true );
-			if ( ! empty( $check_user_response ) ) {
-				// check whether current email subscribed to current list and return if true
-				foreach( $check_user_response as $list ) {
-					if ( ( int ) $list_id === ( int ) $list['id'] ) {
-						return esc_html__( 'Already subscribed', 'bloom' );
-					}
-				}
-			}
-
-			// if user is not subscribed yet - try to subscribe
-			$request_url = esc_url_raw( sprintf(
-				'https://api.madmimi.com/audience_lists/%1$s/add?email=%2$s&first_name=%3$s&last_name=%4$s&username=%5$s&api_key=%6$s',
-				sanitize_text_field( $list_id ),
-				rawurlencode( sanitize_email( $email ) ),
-				sanitize_text_field( $name ),
-				sanitize_text_field( $last_name ),
-				rawurlencode( $username ),
-				sanitize_text_field( $api_key )
-			));
-
-			$theme_request = wp_remote_post( $request_url, array( 'timeout' => 30 ) );
-
-			$response_code = wp_remote_retrieve_response_code( $theme_request );
-
-			if ( ! is_wp_error( $theme_request ) && $response_code == 200 ){
-				$error_message = 'success';
-			} else {
-				if ( is_wp_error( $theme_request ) ) {
-					$error_message = $theme_request->get_error_message();
-				} else {
-					switch ( $response_code ) {
-						case '401' :
-							$error_message = esc_html__( 'Invalid Username or API key', 'bloom' );
-							break;
-						case '400' :
-							$error_message = wp_remote_retrieve_body( $theme_request );
-							break;
-
-						default :
-							$error_message = $response_code;
-							break;
-					}
-				}
-			}
-		} else {
-			if ( is_wp_error( $theme_request ) ) {
-				$error_message = $theme_request->get_error_message();
-			} else {
-				switch ( $response_code ) {
-					case '401' :
-						$error_message = esc_html__( 'Invalid Username or API key', 'bloom' );
-						break;
-					default :
-						$error_message = $response_code;
-						break;
-				}
-			}
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Retrieves the lists via iContact API and updates the data in DB.
-	 * @return string
-	 */
-	function get_icontact_lists( $app_id, $username, $password, $name ) {
-		$lists = array();
-		$account_id = '';
-		$folder_id = '';
-
-		$request_account_id_url = esc_url_raw( 'https://app.icontact.com/icp/a/' );
-
-		$account_data = $this->icontacts_remote_request( $request_account_id_url, $app_id, $username, $password );
-
-		if ( is_array( $account_data ) ) {
-			$account_id = $account_data['accounts'][0]['accountId'];
-
-			if ( '' !== $account_id ) {
-				$request_folder_id_url = esc_url_raw( 'https://app.icontact.com/icp/a/' . $account_id . '/c' );
-
-				$folder_data = $this->icontacts_remote_request( $request_folder_id_url, $app_id, $username, $password );
-
-				if ( is_array( $folder_data ) ) {
-					$folder_id = $folder_data['clientfolders'][0]['clientFolderId'];
-
-					$request_lists_url = esc_url_raw( 'https://app.icontact.com/icp/a/' . $account_id . '/c/' . $folder_id . '/lists' );
-					$lists_data = $this->icontacts_remote_request( $request_lists_url, $app_id, $username, $password );
-
-					if ( is_array( $lists_data ) ) {
-						$error_message = 'success';
-						foreach ( $lists_data['lists'] as $single_list ) {
-							$lists[$single_list['listId']]['name'] = sanitize_text_field( $single_list['name'] );
-							$lists[$single_list['listId']]['account_id'] = sanitize_text_field( $account_id );
-							$lists[$single_list['listId']]['folder_id'] = sanitize_text_field( $folder_id );
-
-							//request for subscribers
-							$request_contacts_url = esc_url_raw( 'https://app.icontact.com/icp/a/' . $account_id . '/c/' . $folder_id . '/contacts?status=total&listId=' . $single_list['listId'] );
-							$subscribers_data = $this->icontacts_remote_request( $request_contacts_url, $app_id, $username, $password );
-							$total_subscribers = isset( $subscribers_data['total'] ) ? sanitize_text_field( $subscribers_data['total'] ) : 0;
-
-							$lists[$single_list['listId']]['subscribers_count'] = $total_subscribers;
-							$lists[$single_list['listId']]['growth_week'] = $this->calculate_growth_rate( 'icontact_' . $single_list['listId'] );
-						}
-
-						$this->update_account( 'icontact', $name, array(
-							'client_id'     => sanitize_text_field( $app_id ),
-							'username'      => sanitize_text_field( $username ),
-							'password'      => sanitize_text_field( $password ),
-							'lists'         => $lists,
-							'is_authorized' => 'true',
-						) );
-					} else {
-						$error_message = $lists_data;
-					}
-				} else {
-					$error_message = $folder_data;
-				}
-			} else {
-				$error_message = esc_html__( 'Account ID is not defined', 'bloom' );
-			}
-		} else {
-			$error_message = $account_data;
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Subscribes to iContact list. Returns either "success" string or error message.
-	 * @return string
-	 */
-	function subscribe_icontact( $app_id, $username, $password, $folder_id, $account_id, $list_id, $email, $name = '', $last_name = '' ) {
-		// prepare URL which will check whether current email subscribed to current list
-		$check_subscription_url = esc_url_raw( sprintf(
-			'https://app.icontact.com/icp/a/%1$s/c/%2$s/contacts?listId=%3$s&email=%4$s',
-			sanitize_text_field( $account_id ),
-			sanitize_text_field( $folder_id ),
-			sanitize_text_field( $list_id ),
-			rawurlencode( sanitize_email( $email ) )
-		));
-		$is_subscribed = $this->icontacts_remote_request( $check_subscription_url, $app_id, $username, $password );
-		if ( is_array( $is_subscribed ) ) {
-			// if current email is not subscribed to current list, then subscribe
-			if ( empty( $is_subscribed['contacts'] ) ) {
-				$add_body = '[{
-					"email":"' . $email .'",
-					"firstName":"' . $name . '",
-					"lastName":"' . $last_name . '",
-					"status":"normal"
-				}]';
-				$add_subscriber_url = esc_url_raw( 'https://app.icontact.com/icp/a/' . $account_id . '/c/' . $folder_id . '/contacts/' );
-
-				$added_account = $this->icontacts_remote_request( $add_subscriber_url, $app_id, $username, $password, true, $add_body );
-				if ( is_array( $added_account ) ) {
-					if ( ! empty( $added_account['contacts'][0]['contactId'] ) ) {
-						$map_contact = '[{
-							"contactId":' . $added_account['contacts'][0]['contactId'] . ',
-							"listId":' . $list_id . ',
-							"status":"normal"
-						}]';
-						$map_subscriber_url = esc_url_raw( 'https://app.icontact.com/icp/a/' . $account_id . '/c/' . $folder_id . '/subscriptions/' );
-
-						$add_to_list = $this->icontacts_remote_request( $map_subscriber_url, $app_id, $username, $password, true, $map_contact );
-					}
-					$error_message = 'success';
-				} else {
-					$error_message = $added_account;
-				}
-			} else {
-				$error_message = esc_html__( 'Already subscribed', 'bloom' );
-			}
-		} else {
-			$error_message = $is_subscribed;
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Executes remote request to iContacts API
-	 * @return string
-	 */
-	function icontacts_remote_request( $request_url, $app_id, $username, $password, $is_post = false, $body = '' ) {
-		if ( false === $is_post ) {
-			$theme_request = wp_remote_get( $request_url, array(
-				'timeout' => 30,
-				'headers' => array(
-					'Accept'       => 'application/json',
-					'Content-Type' => 'application/json',
-					'Api-Version'  => '2.0',
-					'Api-AppId'    => sanitize_text_field( $app_id ),
-					'Api-Username' => sanitize_text_field( $username ),
-					'API-Password' => sanitize_text_field( $password ),
-				)
-			) );
-		} else {
-			$theme_request = wp_remote_post( $request_url, array(
-				'timeout' => 30,
-				'headers' => array(
-					'Accept'       => 'application/json',
-					'Content-Type' => 'application/json',
-					'Api-Version'  => '2.0',
-					'Api-AppId'    => sanitize_text_field( $app_id ),
-					'Api-Username' => sanitize_text_field( $username ),
-					'API-Password' => sanitize_text_field( $password ),
-				),
-				'body' => $body,
-			) );
-		}
-
-		$response_code = wp_remote_retrieve_response_code( $theme_request );
-		if ( ! is_wp_error( $theme_request ) && $response_code == 200 ){
-			$theme_response = wp_remote_retrieve_body( $theme_request );
-			if ( ! empty( $theme_response ) ) {
-				$error_message = json_decode( wp_remote_retrieve_body( $theme_request ), true );
-			} else {
-				$error_message = esc_html__( 'empty response', 'bloom' );
-			}
-		} else {
-			if ( is_wp_error( $theme_request ) ) {
-				$error_message = $theme_request->get_error_message();
-			} else {
-				switch ( $response_code ) {
-					case '401' :
-						$error_message = esc_html__( 'Invalid App ID, Username or Password', 'bloom' );
-						break;
-
-					default :
-						$error_message = $response_code;
-						break;
-				}
-			}
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Retrieves the lists via GetResponse API and updates the data in DB.
-	 * @return string
-	 */
-	function get_getresponse_lists( $api_key, $name ) {
-		if ( ! function_exists( 'curl_init' ) ) {
-			return;
-		}
-		$lists = array();
-
-		if ( ! class_exists( 'ET_Getresponse' ) ) {
-			require_once( ET_BLOOM_PLUGIN_DIR . 'subscription/getresponse/et_getresponse_api.php' );
-		}
-
-		$api = new ET_Getresponse( $api_key );
-
-		$campaigns = (array) $api->get_campaigns();
-
-		if ( ! empty( $campaigns['result'] ) ) {
-			$error_message = 'success';
-
-			foreach( $campaigns['result'] as $id => $details ) {
-				$lists[$id]['name'] = sanitize_text_field( $details['name'] );
-
-				$contacts = (array) $api->get_contacts( array( $id ) );
-
-				$total_contacts = count( $contacts['result'] );
-				$lists[$id]['subscribers_count'] = sanitize_text_field( $total_contacts );
-
-				$lists[$id]['growth_week'] = $this->calculate_growth_rate( 'getresponse_' . $id );
-			}
-
-			$this->update_account( 'getresponse', $name, array(
-				'api_key' => sanitize_text_field( $api_key ),
-				'lists' => $lists,
-				'is_authorized' => sanitize_text_field( 'true' ),
-			) );
-		} else {
-			$error_message = esc_html__( 'Invalid API key or something went wrong during Authorization request', 'bloom' );
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Subscribes to GetResponse list. Returns either "success" string or error message.
-	 * @return string
-	 */
-	function subscribe_get_response( $list, $email, $api_key, $name = '-' ) {
-		if ( ! function_exists( 'curl_init' ) ) {
-			return;
-		}
-
-		if ( ! class_exists( 'ET_Getresponse' ) ) {
-			require_once( ET_BLOOM_PLUGIN_DIR . 'subscription/getresponse/et_getresponse_api.php' );
-		}
-
-		$name = '' == $name ? '-' : $name;
-
-		$client = new ET_Getresponse( $api_key );
-		$result = $client->add_contact(
-			array(
-				'campaign'  => sanitize_text_field( $list ),
-				'name'      => sanitize_text_field( $name ),
-				'email'     => sanitize_email( $email ),
-				'cycle_day' => 0,
-				'action'    => 'standard',
-			)
-		);
-
-		if ( isset( $result['result']['queued'] ) && 1 === $result['result']['queued'] ) {
-			$result = 'success';
-		} else {
-			if ( isset( $result['error']['message'] ) ) {
-				$result = $result['error']['message'];
-			} else {
-				$result = 'unknown error';
-			}
-		}
-
-		return $result;
-	}
-
-	/**
-	 * Retrieves the lists via Sendinblue API and updates the data in DB.
-	 * @return string
-	 */
-	function get_sendinblue_lists( $api_key, $name ) {
-		$lists = array();
-
-		if ( ! function_exists( 'curl_init' ) ) {
-			return esc_html__( 'curl_init is not defined ', 'bloom' );
-		}
-
-		if ( ! class_exists( 'Mailin' ) ) {
-			require_once( ET_BLOOM_PLUGIN_DIR . 'subscription/sendinblue-v2.0/mailin.php' );
-		}
-
-		$mailin = new Mailin( 'https://api.sendinblue.com/v2.0', $api_key );
-		$page = 1;
-		$page_limit = 50;
-		$all_lists = array();
-		$need_request = true;
-
-		while ( true == $need_request ) {
-			$lists_array = $mailin->get_lists( $page, $page_limit );
-			$all_lists = array_merge( $all_lists, $lists_array );
-			if ( 50 > count( $lists_array ) ) {
-				$need_request = false;
-			} else {
-				$page++;
-			}
-		}
-
-		if ( ! empty( $all_lists ) ) {
-			if ( isset( $all_lists['code'] ) && 'success' === $all_lists['code'] ) {
-				$error_message = 'success';
-
-				if ( ! empty( $all_lists['data']['lists'] ) ) {
-					foreach( $all_lists['data']['lists'] as $single_list ) {
-						$lists[$single_list['id']]['name'] = sanitize_text_field( $single_list['name'] );
-
-						$total_contacts = isset( $single_list['total_subscribers'] ) ? $single_list['total_subscribers'] : 0;
-						$lists[$single_list['id']]['subscribers_count'] = sanitize_text_field( $total_contacts );
-
-						$lists[$single_list['id']]['growth_week'] = $this->calculate_growth_rate( 'sendinblue_' . $single_list['id'] );
-					}
-				}
-
-				$this->update_account( 'sendinblue', $name, array(
-					'api_key'       => sanitize_text_field( $api_key ),
-					'lists'         => $lists,
-					'is_authorized' => 'true',
-				) );
-			} else {
-				$error_message = $all_lists['message'];
-			}
-		} else {
-			$error_message = esc_html__( 'Invalid API key or something went wrong during Authorization request', 'bloom' );
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Subscribes to Sendinblue list. Returns either "success" string or error message.
-	 * @return string
-	 */
-	function subscribe_sendinblue( $api_key, $email, $list_id, $name, $last_name = '' ) {
-		if ( ! function_exists( 'curl_init' ) ) {
-			return esc_html__( 'curl_init is not defined ', 'bloom' );
-		}
-
-		if ( ! class_exists( 'Mailin' ) ) {
-			require_once( ET_BLOOM_PLUGIN_DIR . 'subscription/sendinblue-v2.0/mailin.php' );
-		}
-
-		$mailin = new Mailin( 'https://api.sendinblue.com/v2.0', $api_key );
-		$user = $mailin->get_user( $email );
-
-		//check whether current email subscribed to current list
-		if ( ! empty( $user['data']['listid'] ) ) {
-			foreach ( $user['data']['listid'] as $single_list_id ) {
-				if ( (int) $list_id === (int) $single_list_id ) {
-					return esc_html__( 'Already subscribed', 'bloom' );
-				}
-			}
-		}
-
-		// subscribe current email to current list if not subscribed yet
-		$attributes = array(
-			"NAME"    => sanitize_text_field( $name ),
-			"SURNAME" => sanitize_text_field( $last_name ),
-		);
-		$blacklisted = 0;
-		$listid = array( $list_id );
-		$listid_unlink = array();
-		$blacklisted_sms = 0;
-
-		$result = $mailin->create_update_user( $email, $attributes, $blacklisted, $listid, $listid_unlink, $blacklisted_sms );
-
-		if ( 'success' == $result['code'] ) {
-			$error_message = 'success';
-		} else {
-			if ( ! empty( $result['message'] ) ) {
-				$error_message = $result['message'];
-			} else {
-				$error_message = esc_html__( 'Unknown error', 'bloom' );
-			}
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Retrieves the lists from MailPoet table and updates the data in DB.
-	 * @return string
-	 */
-	function get_mailpoet_lists( $name ) {
-		$lists = array();
-
-		global $wpdb;
-		$table_name = $wpdb->prefix . 'wysija_list';
-		$table_users = $wpdb->prefix . 'wysija_user_list';
-
-		if ( ! class_exists( 'WYSIJA' ) ) {
-			$error_message = esc_html__( 'MailPoet plugin is not installed or not activated', 'bloom' );
-		} else {
-			$list_model = WYSIJA::get( 'list', 'model' );
-			$all_lists_array = $list_model->get( array( 'name', 'list_id' ), array( 'is_enabled' => '1' ) );
-
-			$error_message = 'success';
-
-			if ( ! empty( $all_lists_array ) ) {
-				foreach ( $all_lists_array as $list_details ) {
-					$lists[$list_details['list_id']]['name'] = sanitize_text_field( $list_details['name'] );
-
-					$user_model = WYSIJA::get( 'user_list', 'model' );
-					$all_subscribers_array = $user_model->get( array( 'user_id' ), array( 'list_id' => $list_details['list_id'] ) );
-
-					$subscribers_count = count( $all_subscribers_array );
-					$lists[$list_details['list_id']]['subscribers_count'] = sanitize_text_field( $subscribers_count );
-
-					$lists[$list_details['list_id']]['growth_week'] = $this->calculate_growth_rate( 'mailpoet_' . $list_details['list_id'] );
-				}
-			}
-
-			$this->update_account( 'mailpoet', $name, array(
-				'lists'         => $lists,
-				'is_authorized' => 'true',
-			) );
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Subscribes to MailPoet list. Returns either "success" string or error message.
-	 * @return string
-	 */
-	function subscribe_mailpoet( $list_id, $email, $name = '', $last_name = '' ) {
-		global $wpdb;
-		$table_user = $wpdb->prefix . 'wysija_user';
-		$table_user_lists = $wpdb->prefix . 'wysija_user_list';
-
-		if ( ! class_exists( 'WYSIJA' ) ) {
-			$error_message = esc_html__( 'MailPoet plugin is not installed or not activated', 'bloom' );
-		} else {
-			$sql_user_id = "SELECT user_id FROM $table_user WHERE email = %s";
-			$sql_args = array(
-				$email,
-			);
-
-			// get the ID of subscriber if he's in the list already
-			$subscriber_id = $wpdb->get_var( $wpdb->prepare( $sql_user_id, $sql_args ) );
-			$already_subscribed = 0;
-
-			// if current email is subscribed, then check whether it subscribed to the current list
-			if ( ! empty( $subscriber_id ) ) {
-				$sql_is_subscribed = "SELECT COUNT(*) FROM $table_user_lists WHERE user_id = %s AND list_id = %s";
-				$sql_args = array(
-					$subscriber_id,
-					$list_id,
-				);
-
-				$already_subscribed = (int) $wpdb->get_var( $wpdb->prepare( $sql_is_subscribed, $sql_args ) );
-			}
-
-			// if email is not subscribed to current list, then subscribe.
-			if ( 0 === $already_subscribed ) {
-				$new_user = array(
-					'user'      => array(
-						'email'     => $email,
-						'firstname' => $name,
-						'lastname'  => $last_name
-					),
-
-					'user_list' => array( 'list_ids' => array( $list_id ) )
-				);
-
-				$mailpoet_class = WYSIJA::get( 'user', 'helper' );
-				$error_message = $mailpoet_class->addSubscriber( $new_user );
-				$error_message = is_int( $error_message ) ? 'success' : $error_message;
-			} else {
-				$error_message = esc_html__( 'Already Subscribed', 'bloom' );
-			}
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Retrieves the lists via AWeber API and updates the data in DB.
-	 * @return string
-	 */
-	function get_aweber_lists( $api_key, $name ) {
-		$options_array = ET_Bloom::get_bloom_options();
-		$lists = array();
-
-		if ( ! isset( $options_array['accounts']['aweber'][$name]['consumer_key'] ) || ( $api_key != $options_array['accounts']['aweber'][$name]['api_key'] ) ) {
-			$error_message = $this->aweber_authorization( $api_key, $name );
-		} else {
-			$error_message = 'success';
-		}
-
-		if ( 'success' === $error_message ) {
-			if ( ! class_exists( 'AWeberAPI' ) ) {
-				require_once( ET_BLOOM_PLUGIN_DIR . 'subscription/aweber/aweber_api.php' );
-			}
-
-			$account = $this->get_aweber_account( $name );
-
-			if ( $account ) {
-				$aweber_lists = $account->lists;
-				if ( isset( $aweber_lists ) ) {
-					foreach ( $aweber_lists as $list ) {
-						$lists[$list->id]['name'] = sanitize_text_field( $list->name );
-
-						$total_subscribers = $list->total_subscribers;
-						$lists[$list->id]['subscribers_count'] = sanitize_text_field( $total_subscribers );
-
-						$lists[$list->id]['growth_week'] = $this->calculate_growth_rate( 'aweber_' . $list->id );
-					}
-				}
-			}
-
-			$this->update_account( 'aweber', $name, array( 'lists' => $lists ) );
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Subscribes to Aweber list. Returns either "success" string or error message.
-	 * @return string
-	 */
-	function subscribe_aweber( $list_id, $account_name, $email, $name = '' ) {
-		if ( ! class_exists( 'AWeberAPI' ) ) {
-			require_once( ET_BLOOM_PLUGIN_DIR . 'subscription/aweber/aweber_api.php' );
-		}
-
-		$account = $this->get_aweber_account( $account_name );
-
-		if ( ! $account ) {
-			$error_message = esc_html__( 'Aweber: Wrong configuration data', 'bloom' );
-		}
-
-		try {
-			$list_url = "/accounts/{$account->id}/lists/{$list_id}";
-			$list = $account->loadFromUrl( $list_url );
-
-			$new_subscriber = $list->subscribers->create(
-				array(
-					'email' => $email,
-					'name'  => $name,
-				)
-			);
-
-			$error_message = 'success';
-		} catch ( Exception $exc ) {
-			$error_message = $exc->message;
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Retrieves the tokens from AWeber
-	 * @return string
-	 */
-	function aweber_authorization( $api_key, $name ) {
-
-		if ( ! class_exists( 'AWeberAPI' ) ) {
-			require_once( ET_BLOOM_PLUGIN_DIR . 'subscription/aweber/aweber_api.php' );
-		}
-
-		try {
-			$auth = AWeberAPI::getDataFromAweberID( $api_key );
-
-			if ( ! ( is_array( $auth ) && 4 === count( $auth ) ) ) {
-				$error_message = esc_html__( 'Authorization code is invalid. Try regenerating it and paste in the new code.', 'bloom' );
-			} else {
-				$error_message = 'success';
-				list( $consumer_key, $consumer_secret, $access_key, $access_secret ) = $auth;
-
-				$this->update_account( 'aweber', $name, array(
-					'api_key'         => sanitize_text_field( $api_key ),
-					'consumer_key'    => sanitize_text_field( $consumer_key ),
-					'consumer_secret' => sanitize_text_field( $consumer_secret ),
-					'access_key'      => sanitize_text_field( $access_key ),
-					'access_secret'   => sanitize_text_field( $access_secret ),
-					'is_authorized'   => 'true',
-				) );
-			}
-		} catch ( AWeberAPIException $exc ) {
-			$error_message = sprintf(
-				'<p>%4$s</p>
-				<ul>
-					<li>%5$s: %1$s</li>
-					<li>%6$s: %2$s</li>
-					<li>%7$s: %3$s</li>
-				</ul>',
-				esc_html( $exc->type ),
-				esc_html( $exc->message ),
-				esc_html( $exc->documentation_url ),
-				esc_html__( 'AWeberAPIException.', 'bloom' ),
-				esc_html__( 'Type', 'bloom' ),
-				esc_html__( 'Message', 'bloom' ),
-				esc_html__( 'Documentation', 'bloom' )
-			);
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Creates Aweber account using the data saved to plugin's database.
-	 * @return object or false
-	 */
-	function get_aweber_account( $name ) {
-		if ( ! class_exists( 'AWeberAPI' ) ) {
-			require_once( get_template_directory() . '/includes/subscription/aweber/aweber_api.php' );
-		}
-
-		$options_array = ET_Bloom::get_bloom_options();
-		$account = false;
-
-		if ( isset( $options_array['accounts']['aweber'][$name] ) ) {
-			$consumer_key = sanitize_text_field( $options_array['accounts']['aweber'][$name]['consumer_key'] );
-			$consumer_secret = sanitize_text_field( $options_array['accounts']['aweber'][$name]['consumer_secret'] );
-			$access_key = sanitize_text_field( $options_array['accounts']['aweber'][$name]['access_key'] );
-			$access_secret = sanitize_text_field( $options_array['accounts']['aweber'][$name]['access_secret'] );
-
-			try {
-				// Aweber requires curl extension to be enabled
-				if ( ! function_exists( 'curl_init' ) ) {
-					return false;
-				}
-
-				$aweber = new AWeberAPI( $consumer_key, $consumer_secret );
-
-				if ( ! $aweber ) {
-					return false;
-				}
-
-				$account = $aweber->getAccount( $access_key, $access_secret );
-			} catch ( Exception $exc ) {
-				return false;
-			}
-		}
-
-		return $account;
-	}
-
-	/**
-	 * Retrieves the lists via feedblitz API and updates the data in DB.
-	 * @return string
-	 */
-	function get_feedblitz_lists( $api_key, $name ) {
-		$lists = array();
-
-		$request_url = esc_url_raw( 'https://www.feedblitz.com/f.api/syndications?key=' . $api_key );
-
-		$theme_request = wp_remote_get( $request_url, array( 'timeout' => 30, 'sslverify' => false ) );
-
-		$response_code = wp_remote_retrieve_response_code( $theme_request );
-
-		if ( ! is_wp_error( $theme_request ) && $response_code == 200 ){
-			$theme_response = $this->xml_to_array( wp_remote_retrieve_body( $theme_request ) );
-
-			if ( ! empty( $theme_response ) ) {
-				if ( 'ok' == $theme_response['rsp']['@attributes']['stat'] ) {
-					$error_message = 'success';
-					$lists_array = $theme_response['syndications']['syndication'];
-
-					if ( ! empty( $lists_array ) ) {
-						foreach( $lists_array as $list_data ) {
-							$lists[$list_data['id']]['name'] = sanitize_text_field( $list_data['name'] );
-							$lists[$list_data['id']]['subscribers_count'] = sanitize_text_field( $list_data['subscribersummary']['subscribers'] );
-
-							$lists[$list_data['id']]['growth_week'] = $this->calculate_growth_rate( 'feedblitz_' . $list_data['id'] );
-						}
-					}
-
-					$this->update_account( 'feedblitz', $name, array(
-						'api_key'       => sanitize_text_field( $api_key ),
-						'lists'         => $lists,
-						'is_authorized' => 'true',
-					) );
-				} else {
-					$error_message = isset( $theme_response['rsp']['err']['@attributes']['msg'] ) ? $theme_response['rsp']['err']['@attributes']['msg'] : esc_html__( 'Unknown error', 'bloom' );
-				}
-
-			} else {
-				$error_message = esc_html__( 'empty response', 'bloom' );
-			}
-		} else {
-			if ( is_wp_error( $theme_request ) ) {
-				$error_message = $theme_request->get_error_message();
-			} else {
-				$error_message = $response_code;
-			}
-		}
-
-		return $error_message;
-
-	}
-
-	/**
-	 * Subscribes to feedblitz list. Returns either "success" string or error message.
-	 * @return string
-	 */
-	function subscribe_feedblitz( $api_key, $list_id, $name, $email = '', $last_name = '' ) {
-		$request_url = esc_url_raw( 'https://www.feedblitz.com/f?SimpleApiSubscribe&key=' . $api_key . '&email=' . rawurlencode( $email ) . '&listid=' . $list_id . '&FirstName=' . $name . '&LastName=' . $last_name );
-		$theme_request = wp_remote_get( $request_url, array( 'timeout' => 30, 'sslverify' => false ) );
-
-		$response_code = wp_remote_retrieve_response_code( $theme_request );
-
-		if ( ! is_wp_error( $theme_request ) && $response_code == 200 ){
-			$theme_response = $this->xml_to_array( wp_remote_retrieve_body( $theme_request ) );
-			if ( ! empty( $theme_response ) ) {
-				if ( 'ok' == $theme_response['rsp']['@attributes']['stat'] ) {
-					if ( empty( $theme_response['rsp']['success']['@attributes']['msg'] ) ) {
-						$error_message = 'success';
-					} else {
-						$error_message = $theme_response['rsp']['success']['@attributes']['msg'];
-					}
-				} else {
-					$error_message = isset( $theme_response['rsp']['err']['@attributes']['msg'] ) ? $theme_response['rsp']['err']['@attributes']['msg'] : esc_html__( 'Unknown error', 'bloom' );
-				}
-			} else {
-				$error_message = esc_html__( 'empty response', 'bloom' );
-			}
-		} else {
-			if ( is_wp_error( $theme_request ) ) {
-				$error_message = $theme_request->get_error_message();
-			} else {
-				$error_message = $response_code;
-			}
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Retrieves the lists via OntraPort API and updates the data in DB.
-	 * @return string
-	 */
-	function get_ontraport_lists( $api_key, $app_id, $name ) {
-		$appid = $app_id;
-		$key = $api_key;
-		$lists = array();
-		$list_id_array = array();
-
-		// get sequences (lists)
-		$req_type = "fetch_sequences";
-		$postargs = sprintf(
-			'appid=%1$s&key=%2$s&reqType=%3$s',
-			sanitize_text_field( $appid ),
-			sanitize_text_field( $key ),
-			sanitize_text_field( $req_type )
-		);
-		$request = "https://api.ontraport.com/cdata.php";
-		$result = $this->ontraport_request( $postargs, $request );
-		$lists_array = $this->xml_to_array( $result );
-		$lists_id = simplexml_load_string( $result );
-
-		foreach ( $lists_id->sequence as $value ) {
-			$list_id_array[] = (int) $value->attributes()->id;
-		}
-
-		if ( is_array( $lists_array ) ) {
-			$error_message = 'success';
-			if ( ! empty( $lists_array['sequence'] ) ) {
-				$sequence_array = is_array( $lists_array['sequence'] )
-					? $lists_array['sequence']
-					: $lists_array;
-
-				$i = 0;
-
-				foreach( $sequence_array as $id => $list_name ) {
-					$lists[$list_id_array[$i]]['name'] = sanitize_text_field( $list_name );
-
-					// we cannot get amount of subscribers for each sequence due to API limitations, so set it to 0.
-					$lists[$list_id_array[$i]]['subscribers_count'] = 0;
-
-					$lists[$list_id_array[$i]]['growth_week'] = $this->calculate_growth_rate( 'ontraport_' . $list_id_array[$i] );
-					$i++;
-				}
-			}
-			$this->update_account( 'ontraport', $name, array(
-				'api_key'       => sanitize_text_field( $api_key ),
-				'client_id'     => sanitize_text_field( $app_id ),
-				'lists'         => $lists,
-				'is_authorized' => 'true',
-			) );
-		} else {
-			$error_message = $lists_array;
-		}
-
-		return $error_message;
-	}
-
-	function subscribe_ontraport( $app_id, $api_key, $name, $email, $list_id, $last_name = '' ) {
-
-// Construct contact data in XML format
-$data = <<<STRING
-<contact>
-<Group_Tag name="Contact Information">
-<field name="First Name">
-STRING;
-$data .= sanitize_text_field( $name );
-$data .= <<<STRING
-</field>
-<field name="Last Name">
-STRING;
-$data .= sanitize_text_field( $last_name );
-$data .= <<<STRING
-</field>
-<field name="Email">
-STRING;
-$data .= sanitize_email( $email );
-$data .= <<<STRING
-</field>
-</Group_Tag>
-<Group_Tag name="Sequences and Tags">
-<field name="Contact Tags"></field>
-<field name="Sequences">*/*
-STRING;
-$data .= sanitize_text_field( $list_id );
-$data .= <<<STRING
-*/*</field>
-</Group_Tag>
-</contact>
-STRING;
-
-		$data = urlencode( urlencode( $data ) );
-		$reqType = "add";
-		$postargs = sprintf(
-			'appid=%1$s&key=%2$s&return_id=1&reqType=%3$s&data=%4$s',
-			sanitize_text_field( $app_id ),
-			sanitize_text_field( $api_key ),
-			sanitize_text_field( $reqType ),
-			$data
-		);
-
-		$result = $this->ontraport_request( $postargs );
-		$user_array = $this->xml_to_array( $result );
-
-		if ( isset( $user_array['status'] ) && 'Success' == $user_array['status'] ) {
-			$error_message = 'success';
-		} else {
-			$error_message = esc_html__( 'Error occured during subscription', 'bloom' );
-		}
-
-		return $error_message;
-	}
-
-	/**
-	 * Performs the request to OntraPort API and handles the response
-	 * @return xml
-	 */
-	function ontraport_request( $postargs ) {
-		if ( ! function_exists( 'curl_init' ) ) {
-			$response =  esc_html__( 'curl_init is not defined ', 'bloom' );
-		} else {
-			$response = '';
-			$httpCode = '';
-			// Get cURL resource
-			$curl = curl_init();
-			// Set some options
-			curl_setopt_array( $curl, array(
-				CURLOPT_RETURNTRANSFER => 1,
-				CURLOPT_HEADER         => FALSE,
-				CURLOPT_URL            => "https://api.ontraport.com/cdata.php",
-				CURLOPT_POST           => TRUE,
-				CURLOPT_POSTFIELDS     => $postargs,
-				CURLOPT_SSL_VERIFYPEER => FALSE, //we need this option since we perform request to https
-			) );
-			// Send the request & save response to $resp
-			$response = curl_exec( $curl );
-			$httpCode = curl_getinfo( $curl, CURLINFO_HTTP_CODE );
-			// Close request to clear up some resources
-			curl_close( $curl );
-
-			if ( 200 == $httpCode ) {
-				$response = $response;
-			} else {
-				$response = $httpCode;
-			}
-		}
-
-		return $response;
-	}
-
-	/**
-	 * Converts xml data to array
-	 * @return array
-	 */
-	function xml_to_array( $xml_data ) {
-		$xml = simplexml_load_string( $xml_data );
-		$json = json_encode( $xml );
-		$array = json_decode( $json, true );
-
-		return $array;
-	}
-
-	/**
 	 * Generates output for the "Form Integration" options.
 	 * @return string
 	 */
 	function generate_accounts_list() {
-		if ( ! wp_verify_nonce( $_POST['retrieve_lists_nonce'] , 'retrieve_lists' ) ) {
-			die( -1 );
-		}
+		et_core_security_check( 'manage_options', 'retrieve_lists' );
 
-		if ( ! current_user_can( 'manage_options' ) ) {
-			die( -1 );
-		}
+		$service     = isset( $_POST['bloom_service'] ) ? sanitize_text_field( $_POST['bloom_service'] ) : '';
+		$optin_id    = isset( $_POST['bloom_optin_id'] ) ? sanitize_text_field( $_POST['bloom_optin_id'] ) : '';
+		$new_account = isset( $_POST['bloom_add_account'] ) ? sanitize_text_field( $_POST['bloom_add_account'] ) : '';
 
-		$service = !empty( $_POST['bloom_service'] ) ? sanitize_text_field( $_POST['bloom_service'] ) : '';
-		$optin_id = !empty( $_POST['bloom_optin_id'] ) ? sanitize_text_field( $_POST['bloom_optin_id'] ) : '';
-		$new_account = !empty( $_POST['bloom_add_account'] ) ? sanitize_text_field( $_POST['bloom_add_account'] ) : '';
+		$options_array   = ET_Bloom::get_bloom_options();
+		$current_account = isset( $options_array[ $optin_id ]['account_name'] ) ? $options_array[ $optin_id ]['account_name'] : 'empty';
+		$accounts        = $this->_get_accounts( $service );
 
-		$options_array = ET_Bloom::get_bloom_options();
-		$current_account = isset( $options_array[$optin_id]['account_name'] ) ? $options_array[$optin_id]['account_name'] : 'empty';
-
-		$available_accounts = array();
-
-		if ( isset( $options_array['accounts'] ) ) {
-			if ( isset( $options_array['accounts'][$service] ) ) {
-				foreach ( $options_array['accounts'][$service] as $account_name => $details ) {
-					$available_accounts[] = sanitize_text_field( $account_name );
-				}
-			}
-		}
+		$available_accounts = array_keys( $accounts );
 
 		if ( ! empty( $available_accounts ) && '' === $new_account ) {
 			printf(
@@ -4993,15 +3269,12 @@ STRING;
 	 * @return string
 	 */
 	function generate_new_account_form( $service, $account_name = '', $display_name = true ) {
-		if ( ! current_user_can( 'manage_options' ) ) {
-			die( -1 );
-		}
+		et_core_security_check();
 
 		$field_values = '';
 
 		if ( '' !== $account_name ) {
-			$options_array = ET_Bloom::get_bloom_options();
-			$field_values = $options_array['accounts'][$service][$account_name];
+			$field_values = $this->_get_account( $service, $account_name );
 		}
 
 		$form_fields = sprintf(
@@ -5022,216 +3295,24 @@ STRING;
 			);
 		}
 
-		$provider = ET_Bloom_Email_Providers::get_provider( $service );
-		if ( $provider ) {
-			foreach ( $provider->get_fields() as $field_name => $field ) {
-				$form_fields .= sprintf(
-					'<div class="et_dashboard_account_row">
-						<label for="%1$s">%2$s</label>
-						<input%6$s class="provider_field_%5$s%7$s" value="%3$s" id="%1$s">%4$s
-					</div>',
-					esc_attr( $field_name . '_' . $service ),
-					esc_html( $field['label'] ),
-					( ! empty( $field_values ) && isset( $field_values[ $field_name ] ) ? esc_attr( $field_values[ $field_name ] ) : '' ),
-					ET_Bloom::generate_hint( sprintf(
-						'<a href="http://www.elegantthemes.com/plugins/bloom/documentation/accounts/" target="_blank">%1$s</a>',
-						esc_html__( 'Click here for more information', 'bloom' )
-					), false ),
-					esc_attr( $service ),
-					( isset( $field['apply_password_mask'] ) && ! $field['apply_password_mask'] ? '' : ' type="password"' ),
-					( isset( $field['not_required'] ) && $field['not_required'] ? ' et_dashboard_not_required' : '' )
-				);
-			}
-		}
-
-		switch ( $service ) {
-			case 'madmimi' :
-
-				$form_fields .= sprintf( '
-					<div class="et_dashboard_account_row">
-						<label for="%1$s">%3$s</label>
-						<input type="password" value="%5$s" id="%1$s">%7$s
-					</div>
-					<div class="et_dashboard_account_row">
-						<label for="%2$s">%4$s</label>
-						<input type="password" value="%6$s" id="%2$s">%7$s
-					</div>',
-					esc_attr( 'username_' . $service ),
-					esc_attr( 'api_key_' . $service ),
-					esc_html__( 'Username', 'bloom' ),
-					esc_html__( 'API key', 'bloom' ),
-					( '' !== $field_values && isset( $field_values['username'] ) ) ? esc_html( $field_values['username'] ) : '',
-					( '' !== $field_values && isset( $field_values['api_key'] ) ) ? esc_html( $field_values['api_key'] ) : '',
-					ET_Bloom::generate_hint( sprintf(
-						'<a href="http://www.elegantthemes.com/plugins/bloom/documentation/accounts/" target="_blank">%1$s</a>',
-						esc_html__( 'Click here for more information', 'bloom' )
-						), false
-					)
-				);
-
-			break;
-
-			case 'mailchimp' :
-			case 'constant_contact' :
-			case 'getresponse' :
-			case 'sendinblue' :
-			case 'campaign_monitor' :
-			case 'feedblitz' :
-			case 'hubspot' :
-
-				$form_fields .= sprintf( '
-					<div class="et_dashboard_account_row">
-						<label for="%1$s">%2$s</label>
-						<input type="password" value="%3$s" id="%1$s">%4$s
-					</div>',
-					esc_attr( 'api_key_' .  $service ),
-					esc_html__( 'API key', 'bloom' ),
-					( '' !== $field_values && isset( $field_values['api_key'] ) ) ? esc_attr( $field_values['api_key'] ) : '',
-					ET_Bloom::generate_hint( sprintf(
-						'<a href="http://www.elegantthemes.com/plugins/bloom/documentation/accounts/" target="_blank">%1$s</a>',
-						esc_html__( 'Click here for more information', 'bloom' )
-						), false
-					)
-				);
-
-				$form_fields .= ( 'constant_contact' == $service ) ?
-					sprintf(
-						'<div class="et_dashboard_account_row">
-							<label for="%1$s">%2$s</label>
-							<input type="password" value="%3$s" id="%1$s">%4$s
-						</div>',
-						esc_attr( 'token_' . $service ),
-						esc_html__( 'Token', 'bloom' ),
-						( '' !== $field_values && isset( $field_values['token'] ) ) ? esc_attr( $field_values['token'] ) : '',
-						ET_Bloom::generate_hint( sprintf(
-							'<a href="http://www.elegantthemes.com/plugins/bloom/documentation/accounts/" target="_blank">%1$s</a>',
-							esc_html__( 'Click here for more information', 'bloom' )
-						), false )
-					)
-					: '';
-
-			break;
-
-			case 'aweber' :
-				$app_id = 'e233dabd';
-				$aweber_auth_endpoint = 'https://auth.aweber.com/1.0/oauth/authorize_app/' . $app_id;
-
-				$form_fields .= sprintf( '
-					<div class="et_dashboard_account_row et_dashboard_aweber_row">%1$s%2$s</div>',
-					sprintf(
-						__( 'Step 1: <a href="%1$s" target="_blank">Generate authorization code</a><br/>', 'bloom' ),
-						esc_url( $aweber_auth_endpoint )
-					),
-					sprintf( '
-						%2$s
-						<input type="password" value="%3$s" id="%1$s">',
-						esc_attr( 'api_key_' . $service ),
-						esc_html__( 'Step 2: Paste in the authorization code and click "Authorize" button: ', 'bloom' ),
-						( '' !== $field_values && isset( $field_values['api_key'] ) )
-							? esc_attr( $field_values['api_key'] )
-							: ''
-					)
-				);
-			break;
-
-			case 'icontact' :
-				$form_fields .= sprintf('
-					<div class="et_dashboard_account_row">%1$s</div>',
-					sprintf( '
-						<div class="et_dashboard_account_row">
-							<label for="%1$s">%4$s</label>
-							<input type="password" value="%7$s" id="%1$s">%10$s
-						</div>
-						<div class="et_dashboard_account_row">
-							<label for="%2$s">%5$s</label>
-							<input type="password" value="%8$s" id="%2$s">%10$s
-						</div>
-						<div class="et_dashboard_account_row">
-							<label for="%3$s">%6$s</label>
-							<input type="password" value="%9$s" id="%3$s">%10$s
-						</div>',
-						esc_attr( 'client_id_' . $service ),
-						esc_attr( 'username_' .  $service ),
-						esc_attr( 'password_' . $service ),
-						esc_html__( 'App ID', 'bloom' ),
-						esc_html__( 'Username', 'bloom' ),
-						esc_html__( 'Password', 'bloom' ),
-						( '' !== $field_values && isset( $field_values['client_id'] ) ) ? esc_html( $field_values['client_id'] ) : '',
-						( '' !== $field_values && isset( $field_values['username'] ) ) ? esc_html( $field_values['username'] ) : '',
-						( '' !== $field_values && isset( $field_values['password'] ) ) ? esc_html( $field_values['password'] ) : '',
-						ET_Bloom::generate_hint( sprintf(
-							'<a href="http://www.elegantthemes.com/plugins/bloom/documentation/accounts/" target="_blank">%1$s</a>',
-							esc_html__( 'Click here for more information', 'bloom' )
-						), false )
-					)
-				);
-			break;
-
-			case 'ontraport' :
-				$form_fields .= sprintf('
-					<div class="et_dashboard_account_row">
-						<label for="%1$s">%3$s</label>
-						<input type="password" value="%5$s" id="%1$s">%7$s
-					</div>
-					<div class="et_dashboard_account_row">
-						<label for="%2$s">%4$s</label>
-						<input type="password" value="%6$s" id="%2$s">%7$s
-					</div>',
-					esc_attr( 'api_key_' . $service ),
-					esc_attr( 'client_id_' . $service ),
-					esc_html__( 'API key', 'bloom' ),
-					esc_html__( 'APP ID', 'bloom' ),
-					( '' !== $field_values && isset( $field_values['api_key'] ) ) ? esc_attr( $field_values['api_key'] ) : '',
-					( '' !== $field_values && isset( $field_values['client_id'] ) ) ? esc_attr( $field_values['client_id'] ) : '',
-					ET_Bloom::generate_hint( sprintf(
-						'<a href="http://www.elegantthemes.com/plugins/bloom/documentation/accounts/" target="_blank">%1$s</a>',
-						esc_html__( 'Click here for more information', 'bloom' )
-					), false )
-				);
-			break;
-
-			case 'infusionsoft' :
-				$form_fields .= sprintf( '
-					<div class="et_dashboard_account_row">
-						<label for="%1$s">%3$s</label>
-						<input type="password" value="%5$s" id="%1$s">%7$s
-					</div>
-					<div class="et_dashboard_account_row">
-						<label for="%2$s">%4$s</label>
-						<input type="password" value="%6$s" id="%2$s">%7$s
-					</div>',
-					esc_attr( 'api_key_' . $service ),
-					esc_attr( 'client_id_' . $service ),
-					esc_html__( 'API Key', 'bloom' ),
-					esc_html__( 'Application name', 'bloom' ),
-					( '' !== $field_values && isset( $field_values['api_key'] ) ) ? esc_attr( $field_values['api_key'] ) : '',
-					( '' !== $field_values && isset( $field_values['client_id'] ) ) ? esc_attr( $field_values['client_id'] ) : '',
-					ET_Bloom::generate_hint( sprintf(
-						'<a href="http://www.elegantthemes.com/plugins/bloom/documentation/accounts/" target="_blank">%1$s</a>',
-						esc_html__( 'Click here for more information', 'bloom' )
-					), false )
-				);
-			break;
-
-			case 'salesforce':
-				$form_fields .= sprintf(
-					'<div class="et_dashboard_account_row">%1$s</div>',
-					sprintf( '
-						<div class="et_dashboard_account_row">
-							<label for="%1$s">%2$s</label>
-							<input type="text" value="%3$s" id="%1$s">%4$s
-						</div>
-						',
-						esc_attr( 'organization_id_' . $service ),
-						esc_html__( 'Organization ID', 'bloom' ),
-						( '' !== $field_values && isset( $field_values['organization_id'] ) ) ? esc_attr( $field_values['organization_id'] ) : '',
-						ET_Bloom::generate_hint( sprintf(
-							'<a href="http://www.elegantthemes.com/plugins/bloom/documentation/accounts/" target="_blank">%1$s</a>',
-							esc_html__( 'Click here for more information', 'bloom' )
-						), false )
-					)
-				);
-			break;
+		foreach ( $this->providers->account_fields( $service ) as $field_name => $field ) {
+			$form_fields .= sprintf(
+				'<div class="et_dashboard_account_row">
+					<label for="%1$s">%2$s</label>
+					<input%6$s class="provider_field_%5$s%7$s" value="%3$s" id="%1$s">%4$s
+				</div>',
+				esc_attr( $field_name . '_' . $service ),
+				esc_html( $field['label'] ),
+				( ! empty( $field_values ) && isset( $field_values[ $field_name ] ) ? esc_attr( $field_values[ $field_name ] ) : '' ),
+				ET_Bloom::generate_hint( sprintf(
+					'<a href="http://www.elegantthemes.com/plugins/bloom/documentation/accounts/#%2$s" target="_blank">%1$s</a>',
+					esc_html__( 'Click here for more information', 'bloom' ),
+					esc_attr( $service )
+				), false ),
+				esc_attr( $service ),
+				( isset( $field['apply_password_mask'] ) && ! $field['apply_password_mask'] ? '' : ' type="password"' ),
+				( isset( $field['not_required'] ) && $field['not_required'] ? ' et_dashboard_not_required' : '' )
+			);
 		}
 
 		$form_fields .= '</div>';
@@ -5240,58 +3321,22 @@ STRING;
 	}
 
 	/**
-	 * Retrieves lists for specific account from Plugin options.
-	 * @return string
-	 */
-	function retrieve_accounts_list( $service, $accounts_list = array() ) {
-		$options_array = ET_Bloom::get_bloom_options();
-		if ( isset( $options_array['accounts'] ) ) {
-			if ( isset( $options_array['accounts'][$service] ) ) {
-				foreach ( $options_array['accounts'][$service] as $account_name => $details ) {
-					$accounts_list[$account_name] = sanitize_text_field( $account_name );
-				}
-			}
-		}
-
-		return $accounts_list;
-	}
-
-	/**
 	 * Generates the list of "Lists" for selected account in the Dashboard. Returns the generated form to jQuery.
 	 */
 	function generate_mailing_lists( $service = '', $account_name = '' ) {
-		if ( ! wp_verify_nonce( $_POST['retrieve_lists_nonce'] , 'retrieve_lists' ) ) {
-			die( -1 );
-		}
+		et_core_security_check( 'manage_options', 'retrieve_lists' );
 
-		if ( ! current_user_can( 'manage_options' ) ) {
-			die( -1 );
-		}
-
-		$account_for = ! empty( $_POST['bloom_account_name'] ) ? sanitize_text_field( $_POST['bloom_account_name'] ) : '';
-		$service = ! empty( $_POST['bloom_service'] ) ? sanitize_text_field( $_POST['bloom_service'] ) : '';
+		$account_name = ! empty( $_POST['bloom_account_name'] ) ? sanitize_text_field( $_POST['bloom_account_name'] ) : $account_name;
+		$service     = ! empty( $_POST['bloom_service'] ) ? sanitize_text_field( $_POST['bloom_service'] ) : $service;
 		$optin_id = ! empty( $_POST['bloom_optin_id'] ) ? sanitize_text_field( $_POST['bloom_optin_id'] ) : '';
-
-		// SalesForce integration works using web-to-lead with no list support
-		if ( 'salesforce' === $service ) {
-			die();
-		}
 
 		$options_array = ET_Bloom::get_bloom_options();
 		$current_email_list = isset( $options_array[$optin_id] ) ? $options_array[$optin_id]['email_list'] : 'empty';
 
-		$available_lists = array();
+		$available_lists = $this->get_subscriber_lists_for_account( $service, $account_name );
 
-		if ( isset( $options_array['accounts'] ) ) {
-			if ( isset( $options_array['accounts'][$service] ) ) {
-				foreach ( $options_array['accounts'][$service] as $account_name => $details ) {
-					if ( $account_for == $account_name ) {
-						if ( isset( $details['lists'] ) ) {
-							$available_lists = $details['lists'];
-						}
-					}
-				}
-			}
+		if ( false === $available_lists ) {
+			die();
 		}
 
 		printf( '
@@ -5304,7 +3349,6 @@ STRING;
 			selected( 'empty', $current_email_list, false )
 		);
 
-		if ( ! empty( $available_lists ) ) {
 			foreach ( $available_lists as $list_id => $list_details ) {
 				printf( '<option value="%1$s" %3$s>%2$s</option>',
 					esc_attr( $list_id ),
@@ -5312,7 +3356,6 @@ STRING;
 					selected( $list_id, $current_email_list, false )
 				);
 			}
-		}
 
 		printf( '
 				</select>
@@ -5478,7 +3521,7 @@ STRING;
 				$display_there = true;
 			}
 		} else {
-			if ( is_archive() && ( 'flyin' == $optin_type || 'pop_up' == $optin_type ) ) {
+			if ( is_archive() && ! ET_Bloom::is_homepage() && ( 'flyin' == $optin_type || 'pop_up' == $optin_type ) ) {
 				if ( true == $current_optin_limits['on_archive_select'] ) {
 					$display_there = true;
 				} else {
@@ -5495,7 +3538,7 @@ STRING;
 					$page_id = ( ET_Bloom::is_homepage() && !is_page() ) ? 'homepage' : get_the_ID();
 					$current_post_type = 'homepage' === $page_id ? 'home' : get_post_type( $page_id );
 
-					if ( is_singular() || ( 'home' === $current_post_type && ( in_array( $optin_type, array( 'flyin', 'pop_up' ) ) ) ) ) {
+					if ( is_singular() || ( ET_Bloom::is_homepage() && 'product' === $current_post_type ) || ( 'home' === $current_post_type && ( in_array( $optin_type, array( 'flyin', 'pop_up' ) ) ) ) ) {
 						if ( in_array( $page_id, $current_optin_limits['pages_include'] ) || in_array( $page_id, $current_optin_limits['posts_include'] ) ) {
 							$display_there = true;
 						}
@@ -5632,30 +3675,34 @@ STRING;
 
 		$table_name = $wpdb->prefix . 'et_bloom_stats';
 
-		$record_date = current_time( 'mysql' );
-		$ip_address  = $_SERVER[ 'REMOTE_ADDR' ];
+		if ( $wpdb->get_var( "SHOW TABLES LIKE '$table_name'" ) !== $table_name ) {
+			return;
+		}
 
-		$wpdb->insert(
-			$table_name,
-			array(
-				'record_date'  => sanitize_text_field( $record_date ),
-				'optin_id'     => sanitize_text_field( $optin_id ),
-				'record_type'  => sanitize_text_field( $type ),
-				'page_id'      => (int) $page_id,
-				'list_id'      => sanitize_text_field( $list_id ),
-				'ip_address'   => sanitize_text_field( $ip_address ),
-				'removed_flag' => (int) 0,
-			),
-			array(
-				'%s', // record_date
-				'%s', // optin_id
-				'%s', // record_type
-				'%d', // page_id
-				'%s', // list_id
-				'%s', // ip_address
-				'%d', // removed_flag
-			)
+		$record_date = current_time( 'mysql' );
+		$ip_address  = et_core_get_ip_address();
+
+		$fields = array(
+			'record_date'  => sanitize_text_field( $record_date ),
+			'optin_id'     => sanitize_text_field( $optin_id ),
+			'record_type'  => sanitize_text_field( $type ),
+			'page_id'      => (int) $page_id,
+			'list_id'      => sanitize_text_field( $list_id ),
+			'ip_address'   => sanitize_text_field( $ip_address ),
+			'removed_flag' => (int) 0,
 		);
+
+		$format = array(
+			'%s', // record_date
+			'%s', // optin_id
+			'%s', // record_type
+			'%d', // page_id
+			'%s', // list_id
+			'%s', // ip_address
+			'%d', // removed_flag
+		);
+
+		$wpdb->insert( $table_name, $fields, $format );
 
 		$row_added = true;
 
@@ -5821,7 +3868,7 @@ STRING;
 				? ' et_bloom_bottom_stacked'
 				: '',
 			'custom_html' == $details['email_provider']
-				? stripslashes( html_entity_decode( $details['custom_html'] ) )
+				? stripslashes( html_entity_decode( $details['custom_html'], ENT_QUOTES, 'UTF-8' ) )
 				: sprintf( '
 					%1$s
 					<form method="post" class="clearfix">
@@ -5877,12 +3924,18 @@ STRING;
 					'locked' === $details['optin_type'] ? ' et_bloom_submit_subscription_locked' : '' // #12
 				), //#9
 			'' != $success_text
-				? html_entity_decode( wp_kses( stripslashes( $success_text ), array(
-					'a'      => array(),
+				? wp_kses( html_entity_decode( stripslashes( $success_text ) ), array(
+					'a'      => array(
+						'href' => array(),
+						'title' => array(),
+						'class' => array(),
+					),
 					'br'     => array(),
-					'span'   => array(),
+					'span'   => array(
+						'class' => array(),
+					),
 					'strong' => array(),
-				) ) )
+				) )
 				: esc_html__( 'You have Successfully Subscribed!', 'bloom' ), //#10
 			$formatted_footer,
 			'custom_html' == $details['email_provider']
@@ -5908,17 +3961,19 @@ STRING;
 	}
 
 	/**
-	 * Checks whether network supports only First Name
-	 * @return string
+	 * Whether or not provider only supports a single name field.
+	 *
+	 * @return bool
 	 */
 	public static function is_only_name_support( $service ) {
-		$single_name_networks = array(
-			'aweber',
-			'getresponse'
-		);
-		$result = in_array( $service, $single_name_networks );
+		static $name_field_only = null;
 
-		return $result;
+		if ( null === $name_field_only ) {
+			$providers       = ET_Core_API_Email_Providers::instance();
+			$name_field_only = array_keys( $providers->names_by_slug( 'all', 'name_field_only' ) );
+		}
+
+		return in_array( $service, $name_field_only );
 	}
 
 	/**
@@ -5988,6 +4043,8 @@ STRING;
 		if ( ! empty( $optins_set ) ) {
 			foreach( $optins_set as $optin_id => $details ) {
 				if ( $this->check_applicability( $optin_id ) ) {
+					$success_action_enabled = '';
+					$success_action_details = '';
 
 					ET_Bloom::load_scripts_styles();
 
@@ -6005,9 +4062,20 @@ STRING;
 						$page_id = 0;
 					}
 
+					if ( isset( $details['success_action_type'] ) && 'default' !== $details['success_action_type'] ) {
+						$success_action_enabled = ' et_bloom_success_action';
+						$success_action_details = sprintf(
+							' data-success_action_details="%1$s|%2$s"',
+							esc_attr( $details['success_action_type'] ),
+							esc_url( $details['success_action_info'] )
+						);
+					}
+
+					$is_single_name = ( isset( $details['display_name'] ) && '1' == $details['display_name'] ) ? false : true;
+
 					printf(
-						'<div class="et_bloom_flyin et_bloom_optin et_bloom_resize et_bloom_flyin_%6$s et_bloom_%5$s%17$s%1$s%2$s%18$s%19$s%20$s%22$s%27$s%28$s"%3$s%4$s%16$s%21$s%26$s>
-							<div class="et_bloom_form_container%7$s%8$s%9$s%10$s%12$s%13$s%14$s%15$s%23$s%24$s%25$s">
+						'<div class="et_bloom_flyin et_bloom_optin et_bloom_resize et_bloom_flyin_%6$s et_bloom_%5$s%17$s%1$s%2$s%18$s%19$s%20$s%22$s%27$s%28$s"%3$s%4$s%16$s%21$s%26$s%30$s>
+							<div class="et_bloom_form_container%7$s%8$s%9$s%10$s%12$s%13$s%14$s%15$s%23$s%24$s%25$s%29$s">
 								%11$s
 							</div>
 						</div>',
@@ -6016,7 +4084,7 @@ STRING;
 						isset( $details['trigger_auto'] ) && true == $details['trigger_auto']
 							? sprintf( ' data-delay="%1$s"', esc_attr( $details['load_delay'] ) )
 							: '',
-						true == $details['session']
+						isset( $details['session'] ) && true == $details['session']
 							? ' data-cookie_duration="' . esc_attr( $details['session_duration'] ) . '"'
 							: '',
 						esc_attr( $optin_id ), // #5
@@ -6089,7 +4157,9 @@ STRING;
 							? ' data-trigger_click="' . esc_attr( $details['trigger_click_selector'] ) . '"'
 							: '',
 						isset( $details['trigger_click'] ) && $details['trigger_click'] ? ' et_bloom_trigger_click' : '',
-						isset( $details['auto_close'] ) && true === ( bool ) $details['auto_close'] ? ' et_bloom_auto_close' : '' //#28
+						isset( $details['auto_close'] ) && true === ( bool ) $details['auto_close'] ? ' et_bloom_auto_close' : '',
+						$success_action_enabled,
+						$success_action_details //#30
 					);
 				}
 			}
@@ -6102,29 +4172,39 @@ STRING;
 	function display_popup() {
 		$optins_set = $this->popup_optins;
 
-		if ( ! empty( $optins_set ) ) {
-			foreach( $optins_set as $optin_id => $details ) {
-				if ( $this->check_applicability( $optin_id ) ) {
+		foreach ( (array) $optins_set as $optin_id => $details ) {
+			if ( $this->check_applicability( $optin_id ) ) {
+					$success_action_enabled = '';
+					$success_action_details = '';
 
-					ET_Bloom::load_scripts_styles();
+				ET_Bloom::load_scripts_styles();
 
-					$display_optin_id = ET_Bloom::choose_form_ab_test( $optin_id, $optins_set );
+				$display_optin_id = ET_Bloom::choose_form_ab_test( $optin_id, $optins_set );
 
-					if ( $display_optin_id != $optin_id ) {
-						$all_optins = ET_Bloom::get_bloom_options();
-						$optin_id = $display_optin_id;
-						$details = $all_optins[$optin_id];
-					}
+				if ( $display_optin_id != $optin_id ) {
+					$all_optins = ET_Bloom::get_bloom_options();
+					$optin_id = $display_optin_id;
+					$details = $all_optins[$optin_id];
+				}
 
-					if ( is_singular() || ET_Bloom::is_homepage() ) {
-						$page_id = ET_Bloom::is_homepage() ? -1 : get_the_ID();
-					} else {
-						$page_id = 0;
+				if ( is_singular() || ET_Bloom::is_homepage() ) {
+					$page_id = ET_Bloom::is_homepage() ? -1 : get_the_ID();
+				} else {
+					$page_id = 0;
+				}
+
+					if ( isset( $details['success_action_type'] ) && 'default' !== $details['success_action_type'] ) {
+						$success_action_enabled = ' et_bloom_success_action';
+						$success_action_details = sprintf(
+							' data-success_action_details="%1$s|%2$s"',
+							esc_attr( $details['success_action_type'] ),
+							esc_url( $details['success_action_info'] )
+						);
 					}
 
 					printf(
-						'<div class="et_bloom_popup et_bloom_optin et_bloom_resize et_bloom_%5$s%15$s%1$s%2$s%16$s%17$s%18$s%20$s%22$s%23$s"%3$s%4$s%14$s%19$s%21$s>
-							<div class="et_bloom_form_container et_bloom_popup_container%6$s%7$s%8$s%9$s%11$s%12$s%13$s">
+						'<div class="et_bloom_popup et_bloom_optin et_bloom_resize et_bloom_%5$s%15$s%1$s%2$s%16$s%17$s%18$s%20$s%22$s%23$s"%3$s%4$s%14$s%19$s%21$s%25$s>
+							<div class="et_bloom_form_container et_bloom_popup_container%6$s%7$s%8$s%9$s%11$s%12$s%13$s%24$s">
 								%10$s
 							</div>
 						</div>',
@@ -6135,7 +4215,7 @@ STRING;
 						isset( $details['trigger_auto'] ) && true == $details['trigger_auto']
 							? sprintf( ' data-delay="%1$s"', esc_attr( $details['load_delay'] ) )
 							: '',
-						true == $details['session']
+						isset( $details['session'] ) && true == $details['session']
 							? ' data-cookie_duration="' . esc_attr( $details['session_duration'] ) . '"'
 							: '',
 						esc_attr( $optin_id ), // #5
@@ -6171,14 +4251,16 @@ STRING;
 							: '',
 						( isset( $details['hide_mobile_optin'] ) && true == $details['hide_mobile_optin'] )
 							? ' et_bloom_hide_mobile_optin'
-							: '',
+							: '',//#20
 						isset( $details['trigger_click'] ) && $details['trigger_click']
 							? ' data-trigger_click="' . esc_attr( $details['trigger_click_selector'] ) . '"'
 							: '',
 						isset( $details['trigger_click'] ) && true == $details['trigger_click'] ? ' et_bloom_trigger_click' : '',
-						isset( $details['auto_close'] ) && true === ( bool ) $details['auto_close'] ? ' et_bloom_auto_close' : '' //#23
+						isset( $details['auto_close'] ) && true === ( bool ) $details['auto_close'] ? ' et_bloom_auto_close' : '' ,
+						$success_action_enabled,
+						$success_action_details //#25
 					);
-				}
+
 			}
 		}
 	}
@@ -6254,6 +4336,11 @@ STRING;
 	 * Modifies the_content to add the form below content.
 	 */
 	function display_below_post( $content ) {
+		// do not output Below Content optin in Visual Builder
+		if ( isset( $_GET['et_fb'] ) && '1' === $_GET['et_fb'] && is_user_logged_in() ) {
+			return $content;
+		}
+
 		$optins_set = $this->below_post_optins;
 
 		if ( ! empty( $optins_set ) && ! is_singular( 'product' ) ) {
@@ -6282,14 +4369,18 @@ STRING;
 		}
 	}
 
+	function is_authorized( $account ) {
+		return isset( $account['is_authorized'] ) && in_array( $account['is_authorized'], array( true, 'true' ) );
+	}
+
 	/**
-	 * Generates the content for inline form. Used to generate "Below content", "Inilne" and "Locked content" forms.
+	 * Generates the content for inline form. Used to generate "Below content", "Inline" and "Locked content" forms.
 	 */
 	function generate_inline_form( $optin_id, $details, $update_stats = true ) {
 
 		ET_Bloom::load_scripts_styles();
 
-		$output = '';
+		$output = $success_action_enabled = $success_action_details = '';
 
 		$page_id = get_the_ID();
 		$list_id = $details['email_provider'] . '_' . $details['email_list'];
@@ -6309,11 +4400,21 @@ STRING;
 			$custom_css = ET_Bloom::generate_custom_css( '.et_bloom .et_bloom_' . $display_optin_id, $details );
 			$custom_css_output = '' !== $custom_css ? sprintf( '<style type="text/css">%1$s</style>', $custom_css ) : '';
 		}
+		if ( isset( $details['success_action_type'] ) && 'default' !== $details['success_action_type'] ) {
+			$success_action_enabled = ' et_bloom_success_action';
+			$success_action_details = sprintf(
+				' data-success_action_details="%1$s|%2$s"',
+				esc_attr( $details['success_action_type'] ),
+				esc_url( $details['success_action_info'] )
+			);
+		}
+
+		$is_single_name = ( isset( $details['display_name'] ) && '1' == $details['display_name'] ) ? false : true;
 
 		$output .= sprintf(
-			'<div class="et_bloom_inline_form et_bloom_optin et_bloom_make_form_visible et_bloom_%1$s%9$s" style="display: none;">
+			'<div class="et_bloom_inline_form et_bloom_optin et_bloom_make_form_visible et_bloom_%1$s%9$s" style="display: none;"%13$s>
 				%10$s
-				<div class="et_bloom_form_container %3$s%4$s%5$s%6$s%7$s%8$s%11$s">
+				<div class="et_bloom_form_container %3$s%4$s%5$s%6$s%7$s%8$s%11$s%12$s">
 					%2$s
 				</div>
 			</div>',
@@ -6351,7 +4452,9 @@ STRING;
 					'first_last_name' == $details['name_fields'] && ! ET_Bloom::is_only_name_support( $details['email_provider'] )
 						? '3'
 						: '2'
-				)
+				),
+			$success_action_enabled,
+			$success_action_details //#13
 		);
 
 		return $output;
@@ -6386,6 +4489,7 @@ STRING;
 		), $atts );
 		$optin_id = $atts['optin_id'];
 		$optins_set = ET_Bloom::get_bloom_options();
+		$display_optin_id = ET_Bloom::choose_form_ab_test( $optin_id, $optins_set );
 		$selected_optin = isset( $optins_set[$optin_id] ) ? $optins_set[$optin_id] : '';
 		if ( '' == $selected_optin ) {
 			$output = $content;
@@ -6399,7 +4503,7 @@ STRING;
 			}
 
 			$output = sprintf(
-				'<div class="et_bloom_locked_container et_bloom_%4$s" data-page_id="%3$s" data-optin_id="%4$s" data-list_id="%5$s">
+				'<div class="et_bloom_locked_container et_bloom_%4$s" data-page_id="%3$s" data-optin_id="%4$s" data-list_id="%5$s" data-current_optin_id="%6$s">
 					<div class="et_bloom_locked_content" style="display: none;">
 						%1$s
 					</div>
@@ -6411,7 +4515,8 @@ STRING;
 				$form,
 				esc_attr( $page_id ),
 				esc_attr( $optin_id ),
-				esc_attr( $list_id )
+				esc_attr( $list_id ),
+				esc_attr( $display_optin_id )
 			);
 		}
 
@@ -6427,19 +4532,19 @@ STRING;
 	 * Displays the Widget content on front-end.
 	 */
 	public static function display_widget( $optin_id ) {
-		$optins_set = ET_Bloom::get_bloom_options();
-		$selected_optin = isset( $optins_set[$optin_id] ) ? $optins_set[$optin_id] : '';
-		$output = '';
+		$optins_set     = ET_Bloom::get_bloom_options();
+		$selected_optin = isset( $optins_set[ $optin_id ] ) ? $optins_set[ $optin_id ] : '';
+		$output         = '';
 
-		if ( '' !== $selected_optin && 'active' == $optins_set[$optin_id]['optin_status'] && empty( $optins_set[$optin_id]['child_of'] ) ) {
+		if ( '' !== $selected_optin && 'active' == $optins_set[ $optin_id ]['optin_status'] && empty( $optins_set[ $optin_id ]['child_of'] ) ) {
 
 			ET_Bloom::load_scripts_styles();
 
 			$display_optin_id = ET_Bloom::choose_form_ab_test( $optin_id, $optins_set );
 
 			if ( $display_optin_id != $optin_id ) {
-				$optin_id = $display_optin_id;
-				$selected_optin = $optins_set[$optin_id];
+				$optin_id       = $display_optin_id;
+				$selected_optin = $optins_set[ $optin_id ];
 			}
 
 			if ( is_singular() || ET_Bloom::is_homepage() ) {
@@ -6448,39 +4553,48 @@ STRING;
 				$page_id = 0;
 			}
 
-			$list_id = $selected_optin['email_provider'] . '_' . $selected_optin['email_list'];
+			$list_id      = $selected_optin['email_provider'] . '_' . $selected_optin['email_list'];
+			$form_content = ET_Bloom::generate_form_content( $optin_id, $page_id );
 
-			$custom_css = ET_Bloom::generate_custom_css( '.et_bloom .et_bloom_' . $display_optin_id, $selected_optin );
+			$custom_css        = ET_Bloom::generate_custom_css( '.et_bloom .et_bloom_' . $display_optin_id, $selected_optin );
 			$custom_css_output = '' !== $custom_css ? sprintf( '<style type="text/css">%1$s</style>', $custom_css ) : '';
+
+			$use_default_edge            = 'basic_edge' === $selected_optin['edge_style'] || '' === $selected_optin['edge_style'];
+			$edge_style                  = $use_default_edge ? '' : sprintf( ' with_edge %1$s', esc_attr( $selected_optin['edge_style'] ) );
+			$border_style                = '';
+			$use_default_border_position = 'full' === $selected_optin['border_orientation'];
+
+			if ( 'no_border' !== $selected_optin['border_orientation'] ) {
+				$border_position = $use_default_border_position ? '' : " et_bloom_border_position_{$selected_optin['border_orientation']}";
+				$border_style    = esc_attr( " et_bloom_border_{$selected_optin['border_style']}{$border_position}" );
+			}
+
+			$corner_style       = 'rounded' == $selected_optin['corner_style'] ? ' et_bloom_rounded_corners' : '';
+			$field_corner_style = 'rounded' == $selected_optin['field_corner'] ? ' et_bloom_rounded' : '';
+			$text_color_style   = 'light' == $selected_optin['text_color'] ? ' et_bloom_form_text_light' : ' et_bloom_form_text_dark';
+
+			$success_action_class = $success_action_data = '';
+
+			if ( isset( $selected_optin['success_action_type'] ) && 'default' !== $selected_optin['success_action_type'] ) {
+				$success_action_class = ' et_bloom_success_action';
+				$action_type          = esc_attr( $details['success_action_type'] );
+				$action_info          = esc_url( $details['success_action_info'] );
+				$success_action_data  = " data-success_action_details='{$action_type}|{$action_info}'";
+			}
+
+			$optin_id       = esc_attr( $optin_id );
+			$widget_classes = 'et_bloom_widget_content et_bloom_make_form_visible et_bloom_optin';
+			$form_classes   = $edge_style . $border_style . $corner_style . $field_corner_style . $text_color_style . $success_action_class;
 
 			ET_Bloom::add_stats_record( 'imp', $optin_id, $page_id, $list_id );
 
-			$output = sprintf(
-				'<div class="et_bloom_widget_content et_bloom_make_form_visible et_bloom_optin et_bloom_%7$s" style="display: none;">
-					%8$s
-					<div class="et_bloom_form_container %2$s%3$s%4$s%5$s%6$s">
-						%1$s
+			$output = "
+				<div class='{$widget_classes} et_bloom_{$optin_id}' style='display: none;'{$success_action_data}>
+					{$custom_css_output}
+					<div class='et_bloom_form_container{$form_classes}'>
+						{$form_content}
 					</div>
-				</div>',
-				ET_Bloom::generate_form_content( $optin_id, $page_id ),
-				'basic_edge' == $selected_optin['edge_style'] || '' == $selected_optin['edge_style']
-					? ''
-					: sprintf( ' with_edge %1$s', esc_attr( $selected_optin['edge_style'] ) ),
-				( 'no_border' !== $selected_optin['border_orientation'] )
-					? sprintf(
-						' et_bloom_border_%1$s%2$s',
-						$selected_optin['border_style'],
-						'full' !== $selected_optin['border_orientation']
-							? esc_attr( ' et_bloom_border_position_' . $selected_optin['border_orientation'] )
-							: ''
-					)
-					: '',
-				( 'rounded' == $selected_optin['corner_style'] ) ? ' et_bloom_rounded_corners' : '', //#5
-				( 'rounded' == $selected_optin['field_corner'] ) ? ' et_bloom_rounded' : '',
-				'light' == $selected_optin['text_color'] ? ' et_bloom_form_text_light' : ' et_bloom_form_text_dark',
-				esc_attr( $optin_id ),
-				$custom_css_output //#8
-			);
+				</div>";
 		}
 
 		return $output;
@@ -6688,64 +4802,64 @@ STRING;
 			} else {
 				switch ( $single_optin['border_style'] ) {
 					case 'letter' :
-						$custom_css .= esc_html( $form_class ) .  ' .et_bloom_border_letter { background: repeating-linear-gradient( 135deg, ' . esc_html( $single_optin['border_color'] ) . ', ' . esc_html( $single_optin['border_color'] ) . ' 10px, #fff 10px, #fff 20px, #f84d3b 20px, #f84d3b 30px, #fff 30px, #fff 40px ) !important; } ';
+						$custom_css .= esc_html( $form_class ) .  '.et_bloom_optin .et_bloom_border_letter { background: repeating-linear-gradient( 135deg, ' . esc_html( $single_optin['border_color'] ) . ', ' . esc_html( $single_optin['border_color'] ) . ' 10px, #fff 10px, #fff 20px, #f84d3b 20px, #f84d3b 30px, #fff 30px, #fff 40px ) !important; } ';
 						break;
 
 					case 'double' :
-						$custom_css .= esc_html( $form_class ) . ' .et_bloom_border_double { -moz-box-shadow: inset 0 0 0 6px ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 0 0 8px ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 0 0 0 6px ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 0 0 8px ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 0 0 0 6px ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 0 0 8px ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['border_color'] ) . '; } ';
+						$custom_css .= esc_html( $form_class ) . '.et_bloom_optin .et_bloom_border_double { -moz-box-shadow: inset 0 0 0 6px ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 0 0 8px ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 0 0 0 6px ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 0 0 8px ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 0 0 0 6px ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 0 0 8px ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['border_color'] ) . '; } ';
 
 						switch ( $single_optin['border_orientation'] ) {
 							case 'top' :
-								$custom_css .= esc_html( $form_class ) . ' .et_bloom_border_double.et_bloom_border_position_top { -moz-box-shadow: inset 0 6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 8px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 0 6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 8px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 0 6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 8px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['border_color'] ) . '; } ';
+								$custom_css .= esc_html( $form_class ) . '.et_bloom_optin .et_bloom_border_double.et_bloom_border_position_top { -moz-box-shadow: inset 0 6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 8px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 0 6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 8px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 0 6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 8px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['border_color'] ) . '; } ';
 								break;
 
 							case 'right' :
-								$custom_css .= esc_html( $form_class ) . ' .et_bloom_border_double.et_bloom_border_position_right { -moz-box-shadow: inset -6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset -8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset -6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset -8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset -6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset -8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['border_color'] ) . '; } ';
+								$custom_css .= esc_html( $form_class ) . '.et_bloom_optin .et_bloom_border_double.et_bloom_border_position_right { -moz-box-shadow: inset -6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset -8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset -6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset -8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset -6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset -8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['border_color'] ) . '; } ';
 								break;
 
 							case 'bottom' :
-								$custom_css .= esc_html( $form_class ) . ' .et_bloom_border_double.et_bloom_border_position_bottom { -moz-box-shadow: inset 0 -6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 -8px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 0 -6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 -8px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 0 -6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 -8px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['border_color'] ) . '; } ';
+								$custom_css .= esc_html( $form_class ) . '.et_bloom_optin .et_bloom_border_double.et_bloom_border_position_bottom { -moz-box-shadow: inset 0 -6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 -8px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 0 -6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 -8px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 0 -6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 -8px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['border_color'] ) . '; } ';
 								break;
 
 							case 'left' :
-								$custom_css .= esc_html( $form_class ) . ' .et_bloom_border_double.et_bloom_border_position_left { -moz-box-shadow: inset 6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['border_color'] ) . '; } ';
+								$custom_css .= esc_html( $form_class ) . '.et_bloom_optin .et_bloom_border_double.et_bloom_border_position_left { -moz-box-shadow: inset 6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['border_color'] ) . '; } ';
 								break;
 
 							case 'top_bottom' :
-								$custom_css .= esc_html( $form_class ) . ' .et_bloom_border_double.et_bloom_border_position_top_bottom { -moz-box-shadow: inset 0 6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 8px 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset 0 -6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 -8px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 0 6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 8px 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset 0 -6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 -8px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 0 6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 8px 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset 0 -6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 -8px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['border_color'] ) . '; } ';
+								$custom_css .= esc_html( $form_class ) . '.et_bloom_optin .et_bloom_border_double.et_bloom_border_position_top_bottom { -moz-box-shadow: inset 0 6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 8px 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset 0 -6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 -8px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 0 6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 8px 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset 0 -6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 -8px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 0 6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 8px 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset 0 -6px 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 0 -8px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['border_color'] ) . '; } ';
 								break;
 
 							case 'left_right' :
-								$custom_css .= esc_html( $form_class ) . ' .et_bloom_border_double.et_bloom_border_position_left_right { -moz-box-shadow: inset 6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset -6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset -8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset -6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset -8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset -6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset -8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['border_color'] ) . '; } ';
+								$custom_css .= esc_html( $form_class ) . '.et_bloom_optin .et_bloom_border_double.et_bloom_border_position_left_right { -moz-box-shadow: inset 6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset -6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset -8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset -6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset -8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset 8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset -6px 0 0 0 ' . esc_html( $single_optin['header_bg_color'] ) . ', inset -8px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['border_color'] ) . '; } ';
 						}
 						break;
 
 					case 'inset' :
-						$custom_css .= esc_html( $form_class ) . ' .et_bloom_border_inset { -moz-box-shadow: inset 0 0 0 3px ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 0 0 0 3px ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 0 0 0 3px ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['header_bg_color'] ) . '; } ';
+						$custom_css .= esc_html( $form_class ) . '.et_bloom_optin .et_bloom_border_inset { -moz-box-shadow: inset 0 0 0 3px ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 0 0 0 3px ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 0 0 0 3px ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['header_bg_color'] ) . '; } ';
 
 						switch ( $single_optin['border_orientation'] ) {
 							case 'top' :
-								$custom_css .= esc_html( $form_class ) . ' .et_bloom_border_inset.et_bloom_border_position_top { -moz-box-shadow: inset 0 3px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 0 3px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 0 3px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['header_bg_color'] ) . '; } ';
+								$custom_css .= esc_html( $form_class ) . '.et_bloom_optin .et_bloom_border_inset.et_bloom_border_position_top { -moz-box-shadow: inset 0 3px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 0 3px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 0 3px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['header_bg_color'] ) . '; } ';
 								break;
 
 							case 'right' :
-								$custom_css .= esc_html( $form_class ) . ' .et_bloom_border_inset.et_bloom_border_position_right { -moz-box-shadow: inset -3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset -3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset -3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['header_bg_color'] ) . '; } ';
+								$custom_css .= esc_html( $form_class ) . '.et_bloom_optin .et_bloom_border_inset.et_bloom_border_position_right { -moz-box-shadow: inset -3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset -3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset -3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['header_bg_color'] ) . '; } ';
 								break;
 
 							case 'bottom' :
-								$custom_css .= esc_html( $form_class ) . ' .et_bloom_border_inset.et_bloom_border_position_bottom { -moz-box-shadow: inset 0 -3px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 0 -3px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 0 -3px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['header_bg_color'] ) . '; } ';
+								$custom_css .= esc_html( $form_class ) . '.et_bloom_optin .et_bloom_border_inset.et_bloom_border_position_bottom { -moz-box-shadow: inset 0 -3px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 0 -3px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 0 -3px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['header_bg_color'] ) . '; } ';
 								break;
 
 							case 'left' :
-								$custom_css .= esc_html( $form_class ) . ' .et_bloom_border_inset.et_bloom_border_position_left { -moz-box-shadow: inset 3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['header_bg_color'] ) . '; } ';
+								$custom_css .= esc_html( $form_class ) . '.et_bloom_optin .et_bloom_border_inset.et_bloom_border_position_left { -moz-box-shadow: inset 3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['header_bg_color'] ) . '; } ';
 								break;
 
 							case 'top_bottom' :
-								$custom_css .= esc_html( $form_class ) . ' .et_bloom_border_inset.et_bloom_border_position_top_bottom { -moz-box-shadow: inset 0 3px 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset 0 -3px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 0 3px 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset 0 -3px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 0 3px 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset 0 -3px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['header_bg_color'] ) . '; } ';
+								$custom_css .= esc_html( $form_class ) . '.et_bloom_optin .et_bloom_border_inset.et_bloom_border_position_top_bottom { -moz-box-shadow: inset 0 3px 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset 0 -3px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 0 3px 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset 0 -3px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 0 3px 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset 0 -3px 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['header_bg_color'] ) . '; } ';
 								break;
 
 							case 'left_right' :
-								$custom_css .= esc_html( $form_class ) . ' .et_bloom_border_inset.et_bloom_border_position_left_right { -moz-box-shadow: inset 3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset -3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset -3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset -3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['header_bg_color'] ) . '; } ';
+								$custom_css .= esc_html( $form_class ) . '.et_bloom_optin .et_bloom_border_inset.et_bloom_border_position_left_right { -moz-box-shadow: inset 3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset -3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; -webkit-box-shadow: inset 3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset -3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; box-shadow: inset 3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . ', inset -3px 0 0 0 ' . esc_html( $single_optin['border_color'] ) . '; border-color: ' . esc_html( $single_optin['header_bg_color'] ) . '; } ';
 						}
 						break;
 
@@ -6759,10 +4873,10 @@ STRING;
 				}
 			}
 		}
-
+		$fonts_form_class = $form_class . ' .et_bloom_form_container';
 		$custom_css .= isset( $single_optin['form_button_color'] ) && '' !== $single_optin['form_button_color'] ? esc_html( $form_class ) .  ' .et_bloom_form_content button { background-color: ' . esc_html( $single_optin['form_button_color'] ) . ' !important; } ' : '';
-		$custom_css .= isset( $single_optin['header_font'] ) ? $font_functions->et_gf_attach_font( $single_optin['header_font'], $form_class . ' h2, ' . $form_class . ' h2 span, ' . $form_class . ' h2 strong' ) : '';
-		$custom_css .= isset( $single_optin['body_font'] ) ? $font_functions->et_gf_attach_font( $single_optin['body_font'], $form_class . ' p, ' . $form_class . ' p span, ' . $form_class . ' p strong, ' . $form_class . ' form input, ' . $form_class . ' form button span' ) : '';
+		$custom_css .= isset( $single_optin['header_font'] ) ? $font_functions->et_gf_attach_font( $single_optin['header_font'], $fonts_form_class . ' h2, ' . $fonts_form_class . ' h2 span, ' . $fonts_form_class . ' h2 strong' ) : '';
+		$custom_css .= isset( $single_optin['body_font'] ) ? $font_functions->et_gf_attach_font( $single_optin['body_font'], $fonts_form_class . ' p, ' . $fonts_form_class . ' p span, ' . $fonts_form_class . ' p strong, ' . $fonts_form_class . ' form input, ' . $fonts_form_class . ' form button span' ) : '';
 
 		$custom_css .= isset( $single_optin['custom_css'] ) ? ' ' . $single_optin['custom_css'] : '';
 
@@ -6900,365 +5014,12 @@ STRING;
 			}
 		}
 	}
-
 }
 
-class ET_Bloom_Email_Providers {
-	static $providers = array();
-
-	public static function add_provider( $provider ) {
-		self::$providers[ $provider->slug ] = $provider;
-	}
-
-	public static function get_provider( $slug ) {
-		return isset( self::$providers[ $slug ] ) ? self::$providers[ $slug ] : false;
-	}
-
-	public static function get_providers() {
-		return self::$providers;
-	}
-}
-
-class ET_Bloom_Email_Provider {
-	public $name;
-
-	public $slug;
-
-	public $fields = array();
-
-	function __construct() {
-		$this->init();
-
-		ET_Bloom_Email_Providers::add_provider( $this );
-	}
-
-	public function get_fields() {}
-
-	public function get_settings() {
-		return $this->fields;
-	}
-
-	public function update_account( $name, $data_array = array() ) {
-		global $et_bloom;
-
-		$service = $this->slug;
-
-		if ( ! empty( $name ) ) {
-			$name = str_replace( array( '"', "'" ), '', stripslashes( $name ) );
-			$options_array = ET_Bloom::get_bloom_options();
-			$new_account['accounts'] = isset( $options_array['accounts'] ) ? $options_array['accounts'] : array();
-			$new_account['accounts'][ $service ][ $name ] = isset( $new_account['accounts'][ $service ][ $name ] )
-				? array_merge( $new_account['accounts'][ $service ][ $name ], $data_array )
-				: $data_array;
-
-			$et_bloom->update_option( $new_account );
-		}
-	}
-
-	public function fetch_lists( $args ) {}
-
-	public function add_subscriber( $args ) {}
-}
-
-class Bloom_ActiveCampaign extends ET_Bloom_Email_Provider {
-	function init() {
-		$this->name = esc_html__( 'ActiveCampaign', 'bloom' );
-		$this->slug = 'activecampaign';
-	}
-
-	function get_fields() {
-		$fields = array(
-			'api_url' => array(
-				'label' => esc_html__( 'API URL', 'bloom' ),
-			),
-			'api_key' => array(
-				'label' => esc_html__( 'API Key', 'bloom' ),
-			),
-			'form_id' => array(
-				'label'               => esc_html__( 'Form ID', 'bloom' ),
-				'not_required'        => true,
-				'apply_password_mask' => false,
-			),
-		);
-
-		return $fields;
-	}
-
-	public function fetch_lists( $args ) {
-		global $et_bloom;
-
-		$api_url = $args['api_url'];
-		$api_key = $args['api_key'];
-		$form_id = $args['form_id'];
-		$name    = $args['name'];
-
-		$request_url = sprintf( '%s/admin/api.php', $api_url );
-
-		$query_args = array(
-			'api_key'    => $api_key,
-			'api_action' => 'list_list',
-			'api_output' => 'json',
-			'ids'        => 'all',
-			'full'       => '1',
-		);
-
-		$request_url = add_query_arg( $query_args, $request_url );
-
-		$request_url = esc_url_raw( $request_url, array( 'https' ) );
-
-		$response = wp_remote_get( $request_url );
-
-		$response_code = wp_remote_retrieve_response_code( $response );
-
-		if ( is_array( $response ) && 200 === $response_code ) {
-			$api_response = json_decode( wp_remote_retrieve_body( $response ), true );
-
-			if ( empty( $api_response['result_code'] ) ) {
-				switch ( $api_response['result_message'] ) {
-					case 'Failed: Nothing is returned':
-						$error_message = esc_html__( 'No lists found.', 'bloom' );
-						break;
-					case 'You are not authorized to access this file':
-						$error_message = esc_html__( 'Invalid API URL/ API Key.', 'bloom' );
-						break;
-					default:
-						$error_message = esc_html( $api_response['result_message'] );
-						break;
-				}
-			}
-
-		} else {
-			$error_message = esc_html__( 'API request failed, please try again.', 'bloom' );
-		}
-
-		$lists = array();
-
-		if ( empty( $error_message ) ) {
-			foreach( $api_response as $key => $list ) {
-				if ( ! is_numeric( $key ) ) {
-					continue;
-				}
-
-				$error_message = 'success';
-
-				$lists[ $list['id'] ]['name'] = sanitize_text_field( $list['name'] );
-				$lists[ $list['id'] ]['subscribers_count'] = sanitize_text_field( $list['subscriber_count'] );
-				$lists[ $list['id'] ]['growth_week'] = sanitize_text_field( $et_bloom->calculate_growth_rate( $this->slug . '_' . $list['id'] ) );
-			}
-
-			$account_args = array(
-				'lists'         => $lists,
-				'api_key'       => sanitize_text_field( $api_key ),
-				'api_url'       => sanitize_text_field( $api_url ),
-				'is_authorized' => 'true',
-			);
-
-			if ( ! empty( $form_id ) ) {
-				$account_args['form_id'] = (int) $form_id;
-			}
-
-			$this->update_account( sanitize_text_field( $name ), $account_args );
-		}
-
-		return $error_message;
-	}
-
-	public function add_subscriber( $args ) {
-		$api_url   = $args['api_url'];
-		$api_key   = $args['api_key'];
-		$list_id   = $args['list_id'];
-		$email     = $args['email'];
-		$name      = $args['name'];
-		$last_name = $args['last_name'];
-		$form_id   = ! empty( $args['form_id'] ) ? $args['form_id'] : '';
-
-		$request_url = sprintf( '%s/admin/api.php', $api_url );
-
-		$query_args = array(
-			'api_key'    => $api_key,
-			'api_action' => 'contact_add',
-			'api_output' => 'json',
-		);
-
-		$request_url = add_query_arg( $query_args, $request_url );
-
-		$request_url = esc_url_raw( $request_url, array( 'https' ) );
-
-		$body_args = array(
-			'p[' . $list_id .']' => $list_id,
-			'email'              => $email,
-			'first_name'         => $name,
-			'last_name'          => $last_name,
-		);
-
-		if ( '' !== $form_id ) {
-			$body_args['form'] = (int) $form_id;
-		}
-
-		$request_args = array(
-			'body' => $body_args,
-		);
-
-		$response = wp_remote_post( $request_url, $request_args );
-
-		$response_code = wp_remote_retrieve_response_code( $response );
-
-		if ( is_array( $response ) && 200 === $response_code ) {
-			$api_response = json_decode( wp_remote_retrieve_body( $response ), true );
-
-			if ( empty( $api_response['result_code'] ) ) {
-				$error_message = esc_html( $api_response['result_message'] );
-			}
-
-		} else {
-			$error_message = esc_html__( 'API request failed, please try again.', 'bloom');
-		}
-
-		if ( empty( $error_message ) ) {
-			$error_message = 'success';
-		}
-
-		return $error_message;
-	}
-}
-
-class Bloom_Emma extends ET_Bloom_Email_Provider {
-	function init() {
-		$this->name = esc_html__( 'Emma', 'bloom' );
-		$this->slug = 'emma';
-	}
-
-	function get_fields() {
-		$fields = array(
-			'api_key' => array(
-				'label' => esc_html__( 'Public API Key', 'bloom' ),
-			),
-			'private_api_key' => array(
-				'label' => esc_html__( 'Private API Key', 'bloom' ),
-			),
-			'user_id' => array(
-				'label' => esc_html__( 'Account ID', 'bloom' ),
-			),
-		);
-		return $fields;
-	}
-
-	public function fetch_lists( $args ) {
-		global $et_bloom;
-
-		if ( ! function_exists( 'curl_init' ) ) {
-			return esc_html__( 'curl_init is not defined ', 'bloom' );
-		}
-
-		$api_key         = $args['api_key'];
-		$private_api_key = $args['private_api_key'];
-		$user_id         = $args['user_id'];
-		$name            = $args['name'];
-
-		$request_url = sprintf( 'https://api.e2ma.net/%s/groups?group_types=all', $user_id );
-		$api_response = $this->emma_request( $api_key, $private_api_key, $request_url );
-
-		$lists = array();
-
-		if ( ! empty( $api_response ) && is_array( $api_response ) ) {
-			foreach( $api_response as $list => $list_details ) {
-				$error_message = 'success';
-
-				$lists[ $list_details['member_group_id'] ]['name'] = sanitize_text_field( $list_details['group_name'] );
-				$lists[ $list_details['member_group_id'] ]['subscribers_count'] = sanitize_text_field( $list_details['active_count'] );
-				$lists[ $list_details['member_group_id'] ]['growth_week'] = sanitize_text_field( $et_bloom->calculate_growth_rate( $this->slug . '_' . $list_details['member_group_id'] ) );
-			}
-
-			$this->update_account( sanitize_text_field( $name ), array(
-				'lists'           => $lists,
-				'api_key'         => sanitize_text_field( $api_key ),
-				'private_api_key' => sanitize_text_field( $private_api_key ),
-				'user_id'         => sanitize_text_field( $user_id ),
-				'is_authorized'   => 'true',
-			) );
-		} else {
-			switch ( $api_response ) {
-				case '401 ' :
-					return esc_html__( 'Invalid Public API key or Private API key', 'bloom' );
-					break;
-				case '403 Forbidden' :
-					return esc_html__( 'Invalid Account ID', 'bloom' );
-					break;
-				default:
-					return $api_response;
-					break;
-			}
-		}
-
-		return $error_message;
-	}
-
-	public function add_subscriber( $args ) {
-		$api_key         = $args['api_key'];
-		$private_api_key = $args['private_api_key'];
-		$user_id         = $args['user_id'];
-		$list_id         = $args['list_id'];
-		$email           = $args['email'];
-		$name            = $args['name'];
-		$last_name       = $args['last_name'];
-
-		if ( ! function_exists( 'curl_init' ) ) {
-			return esc_html__( 'curl_init is not defined ', 'bloom' );
-		}
-
-		$request_url = sprintf( 'https://api.e2ma.net/%s/members/signup', $user_id );
-		$contact_data = array(
-			'email'     => sanitize_email( $email ),
-			'fields'    => array(
-				'first_name' => sanitize_text_field( $name ),
-				'last_name'  => sanitize_text_field( $last_name ),
-			),
-			'group_ids' => array( $list_id ),
-		);
-
-		$api_response = $this->emma_request( $api_key, $private_api_key, $request_url, $contact_data );
-
-		if ( ! empty( $api_response['member_id'] ) ) {
-			$error_message = 'success';
-		} else {
-			$error_message = esc_html__( 'An error occured, please try again later', 'bloom' );
-		}
-
-		return $error_message;
-	}
-
-	private function emma_request( $api_key, $private_api_key, $request_url, $post_data = array() ) {
-		$curl = curl_init();
-
-		curl_setopt( $curl, CURLOPT_USERPWD, $api_key . ":" . $private_api_key );
-		curl_setopt( $curl, CURLOPT_URL, esc_url_raw( $request_url ) );
-		curl_setopt( $curl, CURLOPT_HTTPHEADER, array( 'Content-type: application/json' ) );
-		curl_setopt( $curl, CURLOPT_RETURNTRANSFER, true );
-		curl_setopt( $curl, CURLOPT_SSL_VERIFYPEER, false );
-		if ( ! empty( $post_data ) ) {
-			curl_setopt( $curl, CURLOPT_POST, true );
-			curl_setopt( $curl, CURLOPT_POSTFIELDS, json_encode( $post_data ) );
-		}
-
-		$response  = curl_exec( $curl );
-		$http_code = curl_getinfo( $curl, CURLINFO_HTTP_CODE );
-
-		curl_close( $curl );
-
-		if ( 200 !== $http_code ) {
-			return $http_code . ' ' . $response;
-		}
-
-		return json_decode( $response, true );
-	}
-}
 
 function et_bloom_init_plugin() {
 	$et_bloom = new ET_Bloom();
 	$GLOBALS['et_bloom'] = $et_bloom;
-
-	new Bloom_ActiveCampaign;
-	new Bloom_Emma;
 }
 add_action( 'plugins_loaded', 'et_bloom_init_plugin' );
 

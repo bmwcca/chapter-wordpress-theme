@@ -10,7 +10,7 @@
  * Plugin Name:       Content Views
  * Plugin URI:        http://wordpress.org/plugins/content-views-query-and-display-post-page/
  * Description:       Query and display <strong>posts, pages</strong> in awesome layouts (<strong>grid, scrollable list, collapsible list</strong>) easier than ever, without coding!
- * Version:           1.9.9.4
+ * Version:           1.9.9.6
  * Author:            CVSOFT LLC
  * Author URI:        http://profiles.wordpress.org/pt-guy
  * Text Domain:       content-views-query-and-display-post-page
@@ -25,7 +25,7 @@ if ( !defined( 'ABSPATH' ) ) {
 }
 
 // Define Constant
-define( 'PT_CV_VERSION', '1.9.9.4' );
+define( 'PT_CV_VERSION', '1.9.9.6' );
 define( 'PT_CV_FILE', __FILE__ );
 define( 'PT_CV_PATH', plugin_dir_path( __FILE__ ) );
 include_once( PT_CV_PATH . 'includes/defines.php' );
@@ -61,13 +61,16 @@ if ( is_admin() ) {
 	PT_Content_Views_Admin::get_instance();
 }
 
-// Support for post thumbnails
+// Enable post thumbnails
 add_theme_support( 'post-thumbnails' );
 
-// Enable shortcode in content
-if ( !apply_filters( PT_CV_PREFIX_ . 'skip_do_shortcode', false ) ) {
-	add_filter( 'the_content', 'do_shortcode', 15 );
-}
+// Enable View shortcode in post content, text widget
+add_filter( 'the_content', 'cv_enable_shortcode', 12 );
+add_filter( 'widget_text', 'cv_enable_shortcode', 12 );
+function cv_enable_shortcode( $text ) {
+	if ( has_shortcode( $text, PT_CV_POST_TYPE ) ) {
+		$text = do_shortcode( $text );
+	}
 
-// Enable shortcodes in text widgets.
-add_filter( 'widget_text', 'do_shortcode', 15 );
+	return $text;
+}

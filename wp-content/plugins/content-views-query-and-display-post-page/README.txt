@@ -3,8 +3,8 @@ Contributors: pt-guy
 Donate link: https://www.contentviewspro.com/?utm_source=wporg&utm_medium=link&utm_campaign=donate
 Tags: post grid, grid plugin, grid, latest post, display post, post, page, category, responsive, list, thumbnail
 Requires at least: 3.3
-Tested up to: 4.8.3
-Stable tag: 1.9.9.4
+Tested up to: 4.9.2
+Stable tag: 1.9.9.6
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -163,11 +163,20 @@ If you are using "Your latest posts" as home page, you should paste this code `<
 
 == Changelog ==
 
+= 1.9.9.6 - 2018/01/19 =
+* Fix: Embedded URLs (that are on their own line) in post content shows in the excerpt
+* Update: Remove dependence of "Show Thumbnail" to "Format" setting, of "Show Taxonomies" to "Content Type" setting
+* Dev: Prevent the global $post to be changed while processing the View shortcode in content of a post
+* Tweak: Small CSS update
+
+= 1.9.9.5 - 2017/11/16 =
+* Update: Only `do_shortcode()` in the post content, text widget if the View shortcode was not done
+* Update: Small CSS update for the Collapsible list
+
 = 1.9.9.4 - 2017/11/01 =
 * Fix incompatibility with WordPress 4.8.3: No posts found in non-English languages sites
 * Tweak: Update and add some texts in Add/Edit View page, Settings page
 * Tweak: remove .mo file, rename .po file to .pot file
-
 
 = 1.9.9.3 - 2017/09/25 =
 * Compatible Fix: "Sort by" feature always returns a same order, when the "Intuitive Custom Post Order" plugin is in used

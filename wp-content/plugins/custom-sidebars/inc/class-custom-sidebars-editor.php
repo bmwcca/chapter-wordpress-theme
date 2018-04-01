@@ -173,6 +173,14 @@ class CustomSidebarsEditor extends CustomSidebars {
 							__( 'You do not have permission for this', 'custom-sidebars' )
 						);
 					} else {
+						$sb_data['advance'] = false;
+						$user_id = get_current_user_id();
+						if ( $user_id ) {
+							$advance = get_user_option( 'custom-sidebars-editor-advance', $user_id );
+							if ( is_array( $advance ) && isset( $advance[ $sb_data['id'] ] ) ) {
+								$sb_data['advance'] = $advance[ $sb_data['id'] ];
+							}
+						}
 						$req->sidebar = $sb_data;
 					}
 				break;
@@ -251,10 +259,12 @@ class CustomSidebarsEditor extends CustomSidebars {
 			$sb_desc = stripslashes( trim( $data['description'] ) );
 		}
 
+		$sb_name = isset( $data['name'] )? $data['name']:'';
+
 		if ( function_exists( 'mb_substr' ) ) {
-			$sb_name = mb_substr( stripslashes( trim( @$data['name'] ) ), 0, 40 );
+			$sb_name = mb_substr( stripslashes( trim( $sb_name ) ), 0, 40 );
 		} else {
-			$sb_name = substr( stripslashes( trim( @$data['name'] ) ), 0, 40 );
+			$sb_name = substr( stripslashes( trim( $sb_name ) ), 0, 40 );
 		}
 
 		if ( empty( $sb_name ) ) {
@@ -307,10 +317,16 @@ class CustomSidebarsEditor extends CustomSidebars {
 			$sidebar['name_lang'] = $sb_name;
 			$sidebar['description_lang'] = $sb_desc;
 		}
-		$sidebar['before_widget'] = stripslashes( trim( @$_POST['before_widget'] ) );
-		$sidebar['after_widget'] = stripslashes( trim( @$_POST['after_widget'] ) );
-		$sidebar['before_title'] = stripslashes( trim( @$_POST['before_title'] ) );
-		$sidebar['after_title'] = stripslashes( trim( @$_POST['after_title'] ) );
+
+		foreach ( array( 'before', 'after' ) as $prefix ) {
+			foreach ( array( 'widget', 'title' ) as $sufix ) {
+				$name = sprintf( '%s_%s', $prefix, $sufix );
+				$sidebar[ $name ] = '';
+				if ( isset( $_POST[ $name ] ) ) {
+					$sidebar[ $name ] = stripslashes( trim( $_POST[ $name ] ) );
+				}
+			}
+		}
 
 		if ( 'insert' == $action ) {
 			$sidebars[] = $sidebar;
@@ -349,6 +365,21 @@ class CustomSidebarsEditor extends CustomSidebars {
 		// Allow user to translate sidebar name/description via WPML.
 		self::wpml_update( $sidebars );
 		$req->data = self::wpml_translate( $sidebar );
+
+		/**
+		 * save user preferences (advance).
+		 *
+		 * @since 3.1.3
+		 */
+		$user_id = get_current_user_id();
+		if ( $user_id ) {
+			$advance = get_user_option( 'custom-sidebars-editor-advance', $user_id );
+			if ( ! is_array( $advance ) ) {
+				$advance = array();
+			}
+			$advance[ $req->data['id'] ] = isset( $_POST['advance'] ) && 'show' === $_POST['advance'];
+			update_user_option( $user_id, 'custom-sidebars-editor-advance', $advance );
+		}
 
 		return $req;
 	}
@@ -626,7 +657,15 @@ class CustomSidebarsEditor extends CustomSidebars {
 		$req->posttypes = $posttypes;
 		$req->categories = $categories;
 		$req->archives = $archives;
-		return $req;
+		/**
+		 * Allow to change data of locations.
+		 *
+		 * @since 3.1.2
+		 *
+		 * @param object $req Object of avaialble data.
+		 * @pages $defaults Data from db.
+		 */
+		return apply_filters( 'custom_sidebars_get_location', $req, $defaults );
 	}
 
 	/**
@@ -822,6 +861,17 @@ class CustomSidebarsEditor extends CustomSidebars {
 			__( 'Updated sidebar <strong>%1$s</strong> settings.', 'custom-sidebars' ),
 			esc_html( $req->sidebar['name'] )
 		);
+		/**
+		 * Allow to change data of locations before save.
+		 *
+		 * @since 3.1.2
+		 *
+		 * @param array $options Current options to save.
+		 * @param string $req->id Sidebar
+		 * @param array $sidebars Allowed sidebars.
+		 * @oaram array $data Data send by request.
+		 */
+		$options = apply_filters( 'custom_sidebars_set_location', $options, $req->id, $sidebars, $data );
 		self::set_options( $options );
 		return $req;
 	}
@@ -1133,7 +1183,7 @@ class CustomSidebarsEditor extends CustomSidebars {
 	public function post_columns( $columns ) {
 		// This column is added.
 		$insert = array(
-			'cs_replacement' => __( 'Custom Sidebars', 'custom-sidebars' ),
+			'cs_replacement' => _x( 'Custom Sidebars', 'Column name on entries list.', 'custom-sidebars' ),
 		);
 
 		// Column is added after column 'title'.

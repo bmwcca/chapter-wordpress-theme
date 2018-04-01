@@ -85,6 +85,7 @@ class ET_Dashboard {
 
 		$this->dashboard_sections = $all_sections;
 		$this->assigned_options = $assigned_options;
+		$this->provider_names = $email_providers;
 	}
 
 	function update_option( $update_array ) {
@@ -236,7 +237,7 @@ class ET_Dashboard {
 	 * Generates modal warning window for internal messages. Works via php or via Ajax
 	 * Ok_link could be a link to particular tab in dashboard, external link or empty
 	 */
-	function generate_modal_warning( $message = '', $ok_link = '#', $hide_close = false, $ok_text = '', $custom_button_text = '', $custom_button_link = '#', $custom_button_class = '' ) {
+	public static function generate_modal_warning( $message = '', $ok_link = '#', $hide_close = false, $ok_text = '', $custom_button_text = '', $custom_button_link = '#', $custom_button_class = '' ) {
 		$ajax_request = isset( $_POST[ 'message' ] ) ? true : false;
 
 		if ( true === $ajax_request ){
@@ -433,7 +434,7 @@ class ET_Dashboard {
 
 		$args['pagenum'] = isset( $args['pagenum'] ) ? absint( $args['pagenum'] ) : 1;
 
-		if ( isset( $args['s'] ) ) {
+		if ( isset( $args['s'] ) && '' !== $args['s'] ) {
 			$query['s'] = $args['s'];
 		}
 
@@ -932,7 +933,7 @@ class ET_Dashboard {
 								case 'checkbox_posts' :
 									echo '
 									<li>
-										<ul class="inline">';
+										<ul class="et_dashboard_inline">';
 									$i = 0;
 									$current_option_value = '' == $current_option_value ? array() : $current_option_value;
 									$current_option_cats = $current_option_value;

@@ -13,7 +13,7 @@ button { border: none;}
 /*------------------[TYPOGRAPHY]------------------*/
 /*------------------------------------------------*/
 
-body, p, button { font-family: 'Open Sans', sans-serif; font-size: 14px; font-weight: 400; color: #939AAA; line-height: 1.7em; }
+#et_dashboard_wrapper_outer, p, button { font-family: 'Open Sans', sans-serif; font-size: 14px; font-weight: 400; color: #939AAA; line-height: 1.7em; }
 
 h1, h2, h3, h4, h5, h6, button, .et_dashboard_action_button a, .modal_title { line-height: 1.1em; padding-bottom: .5em; color: #373942; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 h1 { font-size: 26px; }
@@ -140,9 +140,9 @@ button.et_dashboard_icon_importexport:before	{ content: "\e646"; }
 .et_dashboard_form li p { float: left; width: 200px; line-height: 30px; padding-bottom: 0; }
 li.et_dashboard_auto_height { height: auto; }
 
-.et_dashboard_form ul.inline li { width: auto; margin-right: 40px; float: left; }
-	.et_dashboard_form ul.inline li:last-of-type { margin-right: 0; }
-.et_dashboard_form ul.inline li p { width: auto; margin-left: 10px; }
+.et_dashboard_form ul.et_dashboard_inline li { width: auto; margin-right: 40px; float: left; }
+	.et_dashboard_form ul.et_dashboard_inline li:last-of-type { margin-right: 0; }
+.et_dashboard_form ul.et_dashboard_inline li p { width: auto; margin-left: 10px; }
 
 .et_dashboard_form input, .et_dashboard_form select, .et_dashboard_form textarea, .et_social_networks input,p.et_social_checkmark_holder { height: 30px; float: left; border: none; background-color: #FFF; font-family: 'Open Sans', sans-serif; font-size: 14px; font-weight: 400; color: #939AAA; letter-spacing: 1px; margin: 0; padding: 10px; -webkit-border-radius: 2px; -moz-border-radius: 2px; border-radius: 2px; -webkit-box-sizing: border-box; -moz-box-sizing: border-box; box-sizing: border-box; }
 .et_dashboard_form input { padding: 0 10px; }
@@ -304,7 +304,7 @@ p.et_dashboard_section_subtitle { margin-top: -12px; margin-bottom: 14px; font-s
 }
 
 @media screen and (max-width:480px) {
-	.et_dashboard_form ul.inline li { width: 100%; }
+	.et_dashboard_form ul.et_dashboard_inline li { width: 100%; }
 	.et_dashboard_networks_modal .et_dashboard_inner_container { width: 247px; }
 	.et_dashboard_inner_container .dashboard_icons_container div { width: 100%; margin-right: 0; }
 }

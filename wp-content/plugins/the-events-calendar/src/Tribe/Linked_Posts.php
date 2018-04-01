@@ -173,6 +173,24 @@ class Tribe__Events__Linked_Posts {
 	}
 
 	/**
+	 * Returns the meta key for linked post order
+	 *
+	 * @since 4.6.13
+	 *
+	 * @param string $post_type Post Type
+	 *
+	 * @return bool|string
+	 */
+	public function get_order_meta_key( $post_type ) {
+
+		if ( 'tribe_organizer' === $post_type ) {
+			return '_EventOrganizerID_Order';
+		}
+
+		return false;
+	}
+
+	/**
 	 * Returns the post type's form field container name
 	 *
 	 * @since 4.2
@@ -417,9 +435,9 @@ class Tribe__Events__Linked_Posts {
 	/**
 	 * Get Linked Post info
 	 *
-	 * @param string $linked_post_type Post type of linked post
-	 * @param array $args
-	 * @param int $linked_post_id post id
+	 * @param string    $linked_post_type Post type of linked post
+	 * @param array     $args             Extra WP Query args.
+	 * @param array|int $linked_post_id   Post ID(s).
 	 *
 	 * @return array
 	 */
@@ -569,6 +587,19 @@ class Tribe__Events__Linked_Posts {
 		}
 
 		return $linked_posts;
+	}
+
+	/**
+	 * Save Order of Linked Posts
+	 *
+	 * @since 4.6.13
+	 *
+	 * @param int $target_post_id post id to save meta from
+	 * @param string $post_type the post-type to get the key for
+	 * @param array $current_order an array of the linked post ids being saved
+	 */
+	public function order_linked_posts( $target_post_id, $post_type, $current_order ) {
+		update_post_meta( $target_post_id, $this->get_order_meta_key( $post_type ), $current_order );
 	}
 
 	/**
@@ -729,6 +760,11 @@ class Tribe__Events__Linked_Posts {
 			$linked_posts = array( $linked_posts[0] );
 		}
 
+		// if we allow multiples and there is more then one save current order
+		if ( $this->allow_multiple( $linked_post_type ) && count( $linked_posts ) > 1 ) {
+			$this->order_linked_posts( $event_id, $linked_post_type, $submission[ $linked_post_type_id_field ] );
+		}
+
 		$currently_linked_posts = $this->get_linked_posts_by_post_type( $event_id, $linked_post_type );
 		$currently_linked_posts = wp_list_pluck( $currently_linked_posts, 'ID' );
 
@@ -757,8 +793,8 @@ class Tribe__Events__Linked_Posts {
 		$name                       = "{$linked_post_type_container}[{$linked_post_type_id_field}][]";
 		$my_linked_post_ids         = array();
 		$current_user               = wp_get_current_user();
+		$can_edit_others_posts      = current_user_can( $post_type_object->cap->edit_others_posts );
 		$my_linked_posts            = false;
-		$my_linked_post_options     = '';
 
 		$plural_name             = $this->linked_post_types[ $post_type ]['name'];
 		$singular_name           = ! empty( $this->linked_post_types[ $post_type ]['singular_name'] ) ? $this->linked_post_types[ $post_type ]['singular_name'] : $plural_name;
@@ -836,15 +872,23 @@ class Tribe__Events__Linked_Posts {
 				foreach ( $my_linked_posts as $my_linked_post ) {
 					$my_linked_post_ids[] = $my_linked_post->ID;
 
-					$options->owned['children'][] = array(
+					$new_child = array(
 						'id' => $my_linked_post->ID,
 						'text' => wp_kses( get_the_title( $my_linked_post->ID ), array() ),
 					);
+
+					$edit_link = get_edit_post_link( $my_linked_post );
+
+					if ( ! empty( $edit_link ) ) {
+						$new_child['edit'] = $edit_link;
+					}
+
+					$options->available['children'][] = $new_child;
 				}
 			}
 		}
 
-		if ( current_user_can( $post_type_object->cap->edit_others_posts ) ) {
+		if ( $can_edit_others_posts ) {
 			$linked_posts = $this->get_linked_post_info(
 				$post_type,
 				array(
@@ -869,10 +913,18 @@ class Tribe__Events__Linked_Posts {
 
 		if ( $linked_posts ) {
 			foreach ( $linked_posts as $linked_post ) {
-				$options->available['children'][] = array(
+				$new_child = array(
 					'id' => $linked_post->ID,
 					'text' => wp_kses( get_the_title( $linked_post->ID ), array() ),
 				);
+
+				$edit_link = get_edit_post_link( $linked_post );
+
+				if ( ! empty( $edit_link ) ) {
+					$new_child['edit'] = $edit_link;
+				}
+
+				$options->available['children'][] = $new_child;
 			}
 		}
 

@@ -42,7 +42,7 @@
 .et_bloom .et_bloom_bottom_stacked p.et_bloom_popup_input { width: 100%; margin-bottom: 10px; padding-right: 0; }
 .et_bloom .et_bloom_bottom_stacked button.et_bloom_submit_subscription { width: 100%; }
 
-.et_bloom .et_bloom_form_container h2.et_bloom_error_message { -webkit-animation: et_bloom_fadeInTop 1s 1 cubic-bezier(0.77,0,.175,1); -moz-animation: et_bloom_fadeInTop 1s 1 cubic-bezier(0.77,0,.175,1); -o-animation: et_bloom_fadeInTop 1s 1 cubic-bezier(0.77,0,.175,1); animation: et_bloom_fadeInTop 1s 1 cubic-bezier(0.77,0,.175,1); position: relative; padding: 10px 20px; display: block; background-color: #fff; border-radius: 5px; margin-bottom: 20px; }
+.et_bloom .et_bloom_form_container h2.et_bloom_error_message { -webkit-animation: et_bloom_fadeInTop 1s 1 cubic-bezier(0.77,0,.175,1); -moz-animation: et_bloom_fadeInTop 1s 1 cubic-bezier(0.77,0,.175,1); -o-animation: et_bloom_fadeInTop 1s 1 cubic-bezier(0.77,0,.175,1); animation: et_bloom_fadeInTop 1s 1 cubic-bezier(0.77,0,.175,1); position: relative; padding: 10px 20px; display: block; background-color: #fff; border-radius: 5px; margin-bottom: 20px; word-break: break-all; }
 .et_bloom .et_bloom_form_container h2.et_bloom_error_message:after { content: ''; position: absolute; left: 50%; bottom: -5px; margin-left: -3px; width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 5px solid #fff; }
 
 .et_bloom .et_bloom_responsive_edge { display: none; }
@@ -57,6 +57,8 @@
 .et_bloom .et_bloom_header_outer { height: auto; }
 .et_bloom .et_bloom_form_right .et_bloom_header_outer, .et_bloom .et_bloom_form_left .et_bloom_header_outer { float: left; width: 100%; }
 .et_bloom .et_bloom_form_right .et_bloom_form_header, .et_bloom .et_bloom_form_left .et_bloom_form_header { height: 100%; }
+
+.et-fb .et_bloom_make_form_visible { display: block !important; }
 
 /*---------------------------------*/
 /*------------ FLYIN --------------*/
@@ -98,6 +100,9 @@
 .et_bloom .et_bloom_inline_form { clear: both; margin: 30px 0; display: inline-block; }
 .et_bloom .et_bloom_below_post .et_bloom_inline_form { margin-bottom: 0; }
 .et_bloom .et_bloom_inline_form .et_bloom_form_container { z-index: 99; }
+
+/* adjust z-index of inline form to not overflow the Divi Frontend Builder elements */
+.et-fb.et_bloom .et_bloom_inline_form { position: relative; z-index: 10; }
 
 /*---------------------------------*/
 /*------------ WIDGET -------------*/
@@ -180,7 +185,6 @@
 		.et_bloom .et_bloom_form_container .et_bloom_form_content input, .et_bloom .et_bloom_form_container .et_bloom_form_content textarea, .et_bloom .et_bloom_form_content #mc_embed_signup .mc-field-group input, .et_bloom .et_bloom_form_content .af-body input.text, .et_bloom #mc_embed_signup .mc-field-group select, .et_bloom .et_bloom_form_get_response .et_bloom_form_content .wf-input, .et_bloom .et_bloom_form_content .mimi_field #signup_field_reference { padding: 14px !important; }
 		.et_bloom .et_bloom_form_container .et_bloom_form_content .et_bloom_popup_input input { padding: 10px !important; }
 		.et_bloom .et_bloom_form_container.et_bloom_form_text_light .et_bloom_form_content input, .et_bloom .et_bloom_form_container.et_bloom_form_text_light .et_bloom_form_content textarea, .et_bloom .et_bloom_form_container.et_bloom_form_text_light .et_bloom_form_content #mc_embed_signup .mc-field-group input, .et_bloom .et_bloom_form_content .af-body input.text { background-color: rgba(0,0,0,0.15); color: #fff; }
-		.et_bloom .et_bloom_form_text_light .et_bloom_error_message { color: #fff; }
 			.et_bloom .et_bloom_form_text_light input::-webkit-input-placeholder { color: #fff; }
 			.et_bloom .et_bloom_form_text_light input:-moz-placeholder { color: #fff; }
 			.et_bloom .et_bloom_form_text_light input::-moz-placeholder { color: #fff; }
@@ -297,7 +301,7 @@
 .et_bloom .et_bloom_form_container.et_bloom_form_text_light .et_bloom_form_content div.radio, .et_bloom .et_bloom_form_container.et_bloom_form_text_light .et_bloom_form_content div.checker { background: rgba(0,0,0,0.15); }
 .et_bloom .et_bloom_form_content div.radio, .et_bloom .et_bloom_form_content div.checker, .et_bloom .et_bloom_form_content div.radio span, .et_bloom .et_bloom_form_content div.radio input { width: 25px; height: 25px; }
 
-.et_bloom .et_bloom_form_content div.radio input, .et_bloom .et_bloom_form_content div.checker input { opacity: 0; filter: alpha(opacity=0); -moz-opacity: 0; border: none; background: none; display: -moz-inline-box; display: inline-block; *display: inline; zoom: 1; text-align: center; display: block; height: 100%; }
+.et_bloom .et_bloom_form_content div.radio input, .et_bloom .et_bloom_form_content div.checker input { opacity: 0; filter: alpha(opacity=0); -moz-opacity: 0; border: none; background: none; display: -moz-inline-box; display: inline-block; display: inline; zoom: 1; text-align: center; display: block; height: 100%; }
 .et_bloom .et_bloom_form_content div.radio span, .et_bloom .et_bloom_form_content div.checker span { display: block; height: 100%; margin-bottom: 0 !important; }
 
 .et_bloom .et_bloom_form_content .et_bloom_popup_input { float: left; width: 34%; padding-right: 20px; }

@@ -236,6 +236,12 @@ if ( !class_exists( 'PT_CV_Functions' ) ) {
 				$text = do_shortcode( $text );
 			}
 
+			// Prevent embedded URLs from showing
+			global $wp_embed;
+			if ( method_exists( $wp_embed, 'autoembed' ) ) {
+				$text = $wp_embed->autoembed( $text );
+			}
+
 			$result = self::cv_strip_tags( $text );
 			return self::trim_words( $result, $num_words );
 		}
@@ -261,7 +267,7 @@ if ( !class_exists( 'PT_CV_Functions' ) ) {
 			if ( $strip_all ) {
 				// Strip some shortcodes
 				$temp_shortcode_tags = $shortcode_tags;
-				$shortcode_tags		 = apply_filters( PT_CV_PREFIX_ . 'shortcode_to_strip', array( 'caption' => '' ) );
+				$shortcode_tags		 = apply_filters( PT_CV_PREFIX_ . 'shortcode_to_strip', array( 'caption' => '', 'embed' => '' ) );
 				$text				 = strip_shortcodes( $text );
 				$shortcode_tags		 = $temp_shortcode_tags;
 			}
@@ -1121,12 +1127,22 @@ if ( !class_exists( 'PT_CV_Functions' ) ) {
 			$atts	 = shortcode_atts( apply_filters( PT_CV_PREFIX_ . 'shortcode_params', array( 'id' => 0 ) ), $atts );
 			$id		 = cv_sanitize_vid( $atts[ 'id' ] );
 			if ( $id && !self::duplicated_process( $id, $atts ) ) {
+				# Backup the global post, ensure this happens only one time per page
+				if ( !isset( $GLOBALS[ 'cv_gpost_bak' ] ) && isset( $GLOBALS[ 'post' ] ) ) {
+					$GLOBALS[ 'cv_gpost_bak' ] = $GLOBALS[ 'post' ];
+				}
+
 				$result = apply_filters( PT_CV_PREFIX_ . 'view_shortcode_output', null, $atts );
 				if ( empty( $result ) ) {
 					$settings	 = PT_CV_Functions::view_get_settings( $id );
 					$view_html	 = PT_CV_Functions::view_process_settings( $id, $settings, null, $atts );
 					$result		 = PT_CV_Functions::view_final_output( $view_html );
 					do_action( PT_CV_PREFIX_ . 'flushed_output', $result );
+				}
+
+				# Restore the global post
+				if ( isset( $GLOBALS[ 'cv_gpost_bak' ] ) ) {
+					$GLOBALS[ 'post' ] = $GLOBALS[ 'cv_gpost_bak' ];
 				}
 
 				return $result;

@@ -2,9 +2,10 @@
 Plugin URI: https://wpadverts.com/
 Contributors: gwin
 Tags: classifieds, classified, classified ads, classified script, classifieds script, wp classified, wp classifieds
+Requires PHP: 5.3
 Requires at least: 4.0
-Tested up to: 4.8.1
-Stable tag: 1.1.6
+Tested up to: 4.9
+Stable tag: 1.2.2
 License: GNU Version 2 or Any Later Version
 
 Build classifieds section in seconds. Allow your visitors to browse and post (paid or free) classified ads on your site.
@@ -67,6 +68,7 @@ See all https://wpadverts.com/extensions/
 * Polish
 * Portugese
 * Russian
+* Slovak
 * Slovenian
 * Spanish
 
@@ -96,6 +98,55 @@ Most likely rewrite rules were not registered properly for some reason. Go to wp
 "Save Changes" button without actually changing anything, this should reset router and fix URLs.
 
 == Changelog ==
+
+= 1.2.2 - 2018-03-13 =
+
+* TRANSLATION: Improved Brazilian Translation.
+* FEATURE: Ability to show an image on the left side in Recent Adverts widget.
+* FEATURE: On Advert details page user ID will be used to get an Avatar, the adverts_email will be used as a fallback.
+* API: adverts_field_password added to the Forms API
+* API: filter wpadverts_module_groups added to allow dynamic group adding in wp-admin / Classifieds / Options
+* FIXED: The padlock icon in wp-admin / Plugins list shows too big.
+* FIXED: Gallery shows black when jQuery 2.0 or newer is being used.
+* FIXED: Warning in Featured Ads module.
+* FIXED: Image gallery not showing (when Ad has some images uploaded).
+
+Read release notes here https://wpadverts.com/blog/images-in-recent-ads-widget-wpadverts-1-2-2/
+
+= 1.2.1 - 2018-01-29 =
+
+* TRANSLATION: Slovak
+* FEATURE: The first image in the Gallery will be used in [adverts_list] (unless featured image is selected).
+* FEATURE: [adverts_list] now accepts list_type param which allows to show only Featured or Normal ads.
+* FEATURE: The email and name are prefilled in the Contact Form if logged in user is viewing the page.
+* FEATURE: Sri Lankan Rupees added to the currencies list.
+* FEATURE: Ability to display forms as either: stacked (input below label) or aligned (input next to label).
+* FIXED: Loading icon not spinning when clicking on "Show contact Information".
+* FIXED: Uploaded files validation not working properly.
+* FIXED: File upload not working with modified jQuery.
+* FIXED: Image CW and CCW rotations mixed.
+
+Read release notes here https://wpadverts.com/blog/mark-as-sold-custom-fields/
+
+= 1.2.0 - 2017-12-05 =
+
+* NEW: Image edition in WPAdverts Gallery (available for logged in users by default).
+* NEW: Video upload, note only web video (mp4, webm and ogg) is accepted.
+* NEW: Redesigned image gallery in the frontend with better optimization for mobile devices.
+* NEW: Additional Gallery options in wp-admin / Classifieds / Options / Core / Gallery.
+* NEW: Ability to display image gallery with thumbnails slider below image.
+* NEW: Lightbox allows displaying images and videos in fullscreen mode on click.
+* API: Added file upload validators
+* FIXED: "Send Message" phrase marked for translation incorrectly.
+* FIXED: It is now possible to disable Money filter in adverts_price field.
+* REMOVED: Responsive Slides jQuery plugin
+
+Read release notes here https://wpadverts.com/blog/video-uploads-and-image-editing-v1-2-0/
+
+= 1.1.7 - 2017-11-08 =
+
+* NOTE: The update 1.2 is coming soon, this one is a quick patch to fix incompatibility with WP 4.9
+* FIXED: Gallery Upload incompatibility with WordPress 4.9
 
 = 1.1.6 - 2017-09-04 =
 

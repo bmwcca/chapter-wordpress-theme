@@ -61,6 +61,12 @@ if ( class_exists( 'Tribe__Events__Main' ) ) {
 				$organizer_ids = array_filter( (array) $organizer_ids );
 			}
 		}
+		// if there are linked post order use that instead of the current linked post to change the order
+		$organizer_ids_order = get_post_meta( $event_id, '_EventOrganizerID_Order', true );
+		if ( ! empty( $organizer_ids_order ) ) {
+			$organizer_ids = $organizer_ids_order;
+		}
+
 		return apply_filters( 'tribe_get_organizer_ids', $organizer_ids, $event_id );
 	}
 
@@ -227,7 +233,7 @@ if ( class_exists( 'Tribe__Events__Main' ) ) {
 		if ( $echo != false ) _deprecated_argument( __FUNCTION__, '4.0' );
 
 		$org_id = tribe_get_organizer_id( $postId );
-		if ( class_exists( 'Tribe__Events__Pro__Main' ) ) {
+		if ( class_exists( 'Tribe__Events__Pro__Main' ) && get_post_status( $org_id ) == 'publish' ) {
 			$url = esc_url_raw( get_permalink( $org_id ) );
 			if ( $full_link ) {
 				$name = tribe_get_organizer( $org_id );

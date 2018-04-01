@@ -13,6 +13,7 @@ $all_sections = array(
 			'premade' => esc_html__( 'Premade Layouts', 'bloom' ),
 			'design'  => esc_html__( 'Design', 'bloom' ),
 			'display' => esc_html__( 'Display Settings', 'bloom' ),
+			'success_action' => esc_html__( 'Success Action', 'bloom' )
 		),
 	),
 	'header' => array(
@@ -43,47 +44,19 @@ $all_sections = array(
  * 'validation_type' and 'name' are required attribute for the option which should be saved into DataBase.
  *
  */
+$providers       = ET_Core_API_Email_Providers::instance();
+$email_providers = $providers->names_by_slug();
+
+$name_field_only_support = array_keys( $providers->names_by_slug( 'all', 'name_field_only' ) );
+$last_name_field_support = array_diff( array_keys( $email_providers ), $name_field_only_support );
+
+// Sort alphabetically.
+ksort( $email_providers );
+
+// add the Select One... option as first option now that the list has been alpha sorted
 $email_providers = array(
-	'empty'            => esc_html__( 'Select One...', 'bloom' ),
-	'mailchimp'        => esc_html__( 'MailChimp', 'bloom' ),
-	'aweber'           => esc_html__( 'AWeber', 'bloom' ),
-	'constant_contact' => esc_html__( 'Constant Contact', 'bloom' ),
-	'campaign_monitor' => esc_html__( 'Campaign Monitor', 'bloom' ),
-	'madmimi'          => esc_html__( 'Mad Mimi', 'bloom' ),
-	'icontact'         => esc_html__( 'iContact', 'bloom' ),
-	'getresponse'      => esc_html__( 'GetResponse', 'bloom' ),
-	'sendinblue'       => esc_html__( 'Sendinblue', 'bloom' ),
-	'mailpoet'         => esc_html__( 'MailPoet', 'bloom' ),
-	'feedblitz'        => esc_html__( 'Feedblitz', 'bloom' ),
-	'ontraport'        => esc_html__( 'Ontraport', 'bloom' ),
-	'infusionsoft'     => esc_html__( 'Infusionsoft', 'bloom' ),
-	'salesforce'       => esc_html__( 'SalesForce', 'bloom' ),
-	'hubspot'          => esc_html__( 'HubSpot', 'bloom' ),
-);
-
-$name_field_display_if = array(
-	'constant_contact',
-	'sendinblue',
-	'feedblitz',
-	'mailpoet',
-	'campaign_monitor',
-	'madmimi',
-	'icontact',
-	'mailchimp',
-	'ontraport',
-	'infusionsoft',
-	'salesforce',
-	'hubspot',
-);
-
-$providers = ET_Bloom_Email_Providers::get_providers();
-$additional_provider_options = '';
-if ( ! empty( $providers ) ) {
-	foreach ( $providers as $provider ) {
-		$email_providers[ $provider->slug ] = $provider->name;
-		$name_field_display_if[] = $provider->slug;
-	}
-}
+	'empty' => esc_html__( 'Select One...', 'bloom' ),
+) + $email_providers;
 
 // add this option to the bottom of the list always
 $email_providers['custom_html'] = esc_html__( 'Custom HTML Form', 'bloom' );
@@ -117,7 +90,7 @@ $dashboard_options_all = array(
 			'name'            => 'email_provider',
 			'value'           => $email_providers,
 			'default'         => 'empty',
-			'conditional'     => 'mailchimp_account#aweber_account#constant_contact_account#custom_html#display_name#name_fields#disable_dbl_optin',
+			'conditional'     => 'mailchimp_account#aweber_account#constant_contact_account#custom_html#display_name#name_fields#disable_dbl_optin#enable_dbl_optin',
 			'validation_type' => 'simple_text',
 			'class'           => 'et_dashboard_select_provider',
 		),
@@ -160,6 +133,27 @@ $dashboard_options_all = array(
 			'display_if'      => 'mailchimp',
 			'validation_type' => 'boolean',
 			'hint_text'       => esc_html__( 'Abusing this feature may cause your Mailchimp account to be suspended.', 'bloom' ),
+		),
+		'enable_dbl_optin' => array(
+			'type'            => 'checkbox',
+			'title'           => esc_html__( 'Enable Double Optin', 'bloom' ),
+			'name'            => 'enable_dbl_optin',
+			'default'         => false,
+			'display_if'      => 'icontact',
+			'conditional'     => 'message_id',
+			'validation_type' => 'boolean',
+			'hint_text'       => esc_html__( 'Enables Double optin', 'bloom' ),
+		),
+		'message_id' => array(
+			'type'            => 'input_field',
+			'subtype'         => 'text',
+			'placeholder'     => '',
+			'title'           => esc_html__( 'Message ID', 'bloom' ),
+			'name'            => 'message_id',
+			'default'         => '',
+			'display_if'      => 'true',
+			'validation_type' => 'simple_text',
+			'hint_text'       => esc_html__( 'ID of the Confirmation Message which will be sent to subscribers', 'bloom' ),
 		),
 	),
 
@@ -311,7 +305,7 @@ $dashboard_options_all = array(
 			'default'         => false,
 			'conditional'     => 'single_name_text',
 			'validation_type' => 'boolean',
-			'display_if'      => 'getresponse#aweber',
+			'display_if'      => implode( '#', $name_field_only_support ),
 		),
 		'name_fields' => array(
 			'type'            => 'select',
@@ -326,7 +320,7 @@ $dashboard_options_all = array(
 			'default'         => 'no_name',
 			'conditional'     => 'name_text#last_name#single_name_text',
 			'validation_type' => 'simple_text',
-			'display_if'      => implode( '#', $name_field_display_if ),
+			'display_if'      => implode( '#', $last_name_field_support ),
 		),
 		'name_text' => array(
 			'type'            => 'input_field',
@@ -785,6 +779,38 @@ $dashboard_options_all = array(
 		),
 	),
 
+	'success_action' => array(
+		'section_start' => array(
+			'type'  => 'section_start',
+			'title' => '',
+		),
+		'success_action_type' => array(
+			'type'            => 'select',
+			'title'           => esc_html__( 'Success Action Type', 'bloom' ),
+			'name'            => 'success_action_type',
+			'class'           => 'et_dashboard_form_success_action_type',
+			'value'           => array(
+				'default'      => esc_html__( 'Success Message', 'bloom' ),
+				'redirect_url' => esc_html__( 'Redirect To URL', 'bloom' ),
+			),
+			'default'         => 'default',
+			'validation_type' => 'simple_text',
+			'conditional'     => 'success_action_info',
+			'hint_text'       => esc_html__( 'This action displays a success message.', 'bloom' ),
+		),
+		'success_action_info' => array(
+			'type'            => 'input_field',
+			'subtype'         => 'text',
+			'placeholder'     => '',
+			'title'           => esc_html__( 'URL', 'bloom' ),
+			'name'            => 'success_action_info',
+			'hint_text'       => esc_html__( 'This action redirects the subscriber to a URL of your choosing.', 'bloom' ),
+			'default'         => '',
+			'validation_type' => 'url',
+			'display_if'      => 'redirect_url',
+		),
+	),
+
 	'flyin_orientation' => array(
 		'section_start' => array(
 			'type'  => 'section_start',
@@ -1067,6 +1093,12 @@ $dashboard_options_all = array(
 		'subtitle' => esc_html__( 'Define when and where to display this optin on your website.', 'bloom' ),
 	),
 
+	'success_action_title' => array(
+		'type'     => 'main_title',
+		'title'    => esc_html__( 'Success Action', 'bloom' ),
+		'subtitle' => esc_html__( 'Control what happens when someone successfully subscribes to your mailing list using this opt-in.', 'bloom' ),
+	),
+
 	'import_export' => array(
 		'type'  => 'import_export',
 		'title' => esc_html__( 'Import/Export', 'bloom' ),
@@ -1150,6 +1182,8 @@ $assigned_options = array(
 			$dashboard_options_all[ 'form_integration' ][ 'email_list' ],
 			$dashboard_options_all[ 'form_integration' ][ 'custom_html' ],
 			$dashboard_options_all[ 'form_integration' ][ 'disable_dbl_optin' ],
+			$dashboard_options_all[ 'form_integration' ][ 'enable_dbl_optin' ],
+			$dashboard_options_all[ 'form_integration' ][ 'message_id' ],
 		$dashboard_options_all[ 'end_of_section' ],
 	),
 	'optin_premade_options' => array(
@@ -1256,6 +1290,15 @@ $assigned_options = array(
 			$dashboard_options_all[ 'posts_include' ][1],
 		$dashboard_options_all[ 'end_of_section' ],
 	),
+
+	'optin_success_action_options' => array(
+		$dashboard_options_all[ 'success_action_title' ],
+		$dashboard_options_all[ 'success_action' ][ 'section_start' ],
+			$dashboard_options_all[ 'success_action' ][ 'success_action_type' ],
+			$dashboard_options_all[ 'success_action' ][ 'success_action_info' ],
+		$dashboard_options_all[ 'end_of_section' ]
+	),
+
 	'header_importexport_options' => array(
 		$dashboard_options_all[ 'import_export' ],
 	),

@@ -472,6 +472,10 @@ class ET_Dashboard_Fonts {
 		$protocol = is_ssl() ? 'https' : 'http';
 
 		foreach ( $et_gf_font_names as $et_gf_font_name ) {
+			if ( empty( $et_gf_font_name ) ) {
+				continue;
+			}
+
 			$google_font_character_set = $google_fonts[$et_gf_font_name]['character_set'];
 
 			$query_args = array(
