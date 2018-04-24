@@ -606,6 +606,8 @@ if ( !class_exists( 'PT_CV_Functions' ) ) {
 				return;
 			}
 
+			do_action( PT_CV_PREFIX_ . 'get_view_settings' );
+
 			$view_settings = array();
 
 			$post_id = PT_CV_Functions::post_id_from_meta_id( $meta_id );
@@ -1252,7 +1254,7 @@ if ( !class_exists( 'PT_CV_Functions' ) ) {
 				$data_page	 = sprintf( 'data-page="%s"', absint( $this_page ) );
 			}
 
-			$html	 = sprintf( '<a %s href="%s">%s</a>', $data_page, esc_url( add_query_arg( 'vpage', $this_page ) ), $label );
+			$html	 = sprintf( '<a %s href="%s">%s</a>', $data_page, cv_comp_get_pagenum_link( $this_page ), $label );
 			$class	 = $class ? sprintf( 'class="%s"', esc_attr( $class ) ) : '';
 
 			return sprintf( '<li %s>%s</li>', $class, $html );
@@ -1331,9 +1333,9 @@ if ( !class_exists( 'PT_CV_Functions' ) ) {
 				if ( !empty( $pargs[ 'page' ] ) ) {
 					$paged = absint( $pargs[ 'page' ] );
 				}
-
-				if ( !empty( $_GET[ 'vpage' ] ) && PT_CV_Functions::setting_value( PT_CV_PREFIX . 'pagination-type' ) === 'normal' ) {
-					$paged = absint( $_GET[ 'vpage' ] );
+				$pagenum = cv_comp_get_page_number();
+				if ( !empty( $pagenum ) && PT_CV_Functions::setting_value( PT_CV_PREFIX . 'pagination-type' ) === 'normal' ) {
+					$paged = absint( $pagenum );
 				}
 			}
 

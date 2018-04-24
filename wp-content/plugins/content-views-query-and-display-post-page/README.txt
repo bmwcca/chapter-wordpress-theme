@@ -3,8 +3,8 @@ Contributors: pt-guy
 Donate link: https://www.contentviewspro.com/?utm_source=wporg&utm_medium=link&utm_campaign=donate
 Tags: post grid, grid plugin, grid, latest post, display post, post, page, category, responsive, list, thumbnail
 Requires at least: 3.3
-Tested up to: 4.9.2
-Stable tag: 1.9.9.6
+Tested up to: 4.9.5
+Stable tag: 2.0.2
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
 
@@ -162,6 +162,11 @@ If you are using "Your latest posts" as home page, you should paste this code `<
 
 
 == Changelog ==
+
+= 2.0.2 - 2018/04/09 =
+* Update: Use SEO friendly URL for normal pagination. Redirect /?vpage=NUMBER to new friendly URL depending on which page the pagination is showing on
+* Compatible Fix: Excerpt of posts created by the Cornerstone Page Builder plugin is incorrect
+* Tweak: Update content of the Settings page and description of some settings
 
 = 1.9.9.6 - 2018/01/19 =
 * Fix: Embedded URLs (that are on their own line) in post content shows in the excerpt

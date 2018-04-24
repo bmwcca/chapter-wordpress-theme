@@ -310,7 +310,7 @@ PT_CV_Functions::view_submit();
 											),
 										),
 										// Upgrade to Pro: Custom taxonomy
-										!get_option( 'pt_cv_version_pro' ) ? PT_CV_Settings::get_cvpro( __( 'Filter by custom taxonomies', 'content-views-query-and-display-post-page' ) ) : '',
+										!get_option( 'pt_cv_version_pro' ) ? PT_CV_Settings::get_cvpro( __( 'Filter by custom taxonomy', 'content-views-query-and-display-post-page' ) ) : '',
 										// Terms list
 										array(
 											'label'			 => array(
@@ -348,7 +348,7 @@ PT_CV_Functions::view_submit();
 												),
 											),
 										),
-										!get_option( 'pt_cv_version_pro' ) ? PT_CV_Settings::get_cvpro( sprintf( __( 'In this lite version, when you select any term above, it will not replace posts layout in term page (for example: %s) with layout of this View', 'content-views-query-and-display-post-page' ), '<code style="font-size: 11px;">http://yourdomain/category/selected_term/</code>' ), 12, null, true ) : '',
+										!get_option( 'pt_cv_version_pro' ) ? PT_CV_Settings::get_cvpro( __( 'In this lite version, it is not possible to replace posts layout in category/tag page with the layout of this View.<br>In the Pro version, it is possible', 'content-views-query-and-display-post-page' ), 12, null, true ) : '',
 										apply_filters( PT_CV_PREFIX_ . 'taxonomies_custom_settings', array() ),
 									), // End Taxonomies Settings
 									// Sort by Settings

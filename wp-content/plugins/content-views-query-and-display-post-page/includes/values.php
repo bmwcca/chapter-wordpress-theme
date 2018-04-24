@@ -81,7 +81,7 @@ if ( !class_exists( 'PT_CV_Values' ) ) {
 				$result[ $taxonomy->name ] = $taxonomy->labels->singular_name;
 			}
 
-			return $result;
+			return apply_filters( PT_CV_PREFIX_ . 'tax_list', $result );
 		}
 
 		/**

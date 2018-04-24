@@ -457,6 +457,7 @@ if ( !class_exists( 'PT_CV_Html' ) ) {
 					ob_start();
 					the_content();
 					$content = ob_get_clean();
+					$content = apply_filters( PT_CV_PREFIX_ . 'field_content_full', $content, $fargs, $post );
 
 					break;
 			}

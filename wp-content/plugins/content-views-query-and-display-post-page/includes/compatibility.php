@@ -74,6 +74,55 @@ function cv_comp_plugin_siteoriginbuilder( $args, $fargs, $this_post ) {
 }
 
 /**
+ * Cornerstone Page Builder
+ * Excerpt/thumbnal is incorrect (can't get)
+ * @since 2.0
+ */
+add_filter( 'the_content', 'cv_comp_plugin_cornerstone_single', PHP_INT_MAX );
+function cv_comp_plugin_cornerstone_single( $content ) {
+	if ( isset( $_REQUEST[ 'cv_comp_cs_content' ] ) ) {
+		// Save the content, which is already processed by Cornerstone
+		update_post_meta( get_the_ID(), 'cv_comp_cornerstone_content', array(
+			'expires'	 => time() + DAY_IN_SECONDS,
+			'data'		 => $content,
+		) );
+	}
+
+	return $content;
+}
+
+add_filter( 'pt_cv_field_content_excerpt', 'cv_comp_plugin_cornerstone_core', 9, 3 );
+add_filter( 'pt_cv_field_content_full', 'cv_comp_plugin_cornerstone_core', 9, 3 );
+function cv_comp_plugin_cornerstone_core( $args, $fargs, $this_post ) {
+	if ( cv_is_active_plugin( 'cornerstone' ) ) {
+		$cache = $this_post->cv_comp_cornerstone_content;
+		if ( empty( $cache ) || $cache[ 'expires' ] < time() ) {
+			// Simulate the frontend, to get processed output by Cornerstone
+			@file_get_contents( add_query_arg( 'cv_comp_cs_content', 1, get_permalink( $this_post->ID ) ) );
+			// Get the processed content
+			$cache = get_post_meta( $this_post->ID, 'cv_comp_cornerstone_content', true );
+		}
+
+		if ( isset( $cache[ 'data' ] ) ) {
+			$args = $cache[ 'data' ];
+		}
+	}
+
+	return $args;
+}
+
+// Prevent error "The preview was unresponsive after loading"
+add_action( 'cornerstone_load_builder', 'cv_comp_plugin_cornerstone_builder' );
+add_action( 'cornerstone_before_boot_app', 'cv_comp_plugin_cornerstone_builder' );
+add_action( 'cornerstone_before_ajax', 'cv_comp_plugin_cornerstone_builder' );
+add_action( 'cornerstone_before_load_preview', 'cv_comp_plugin_cornerstone_builder' );
+function cv_comp_plugin_cornerstone_builder() {
+	if ( defined( 'PT_CV_POST_TYPE' ) ) {
+		remove_shortcode( PT_CV_POST_TYPE );
+	}
+}
+
+/**
  * FacetWP
  * Missing posts in output when access page with parameters 'fwp_*' of FacetWP plugin
  *
@@ -218,6 +267,14 @@ function cv_comp_pagination_settings( $action, $view_settings ) {
 
 		if ( !empty( $key ) && !empty( $case ) ) {
 			$cv_unique_id = $key;
+
+			// Simplify the array
+			foreach ( $view_settings as $key => $value ) {
+				if ( strpos( $key, PT_CV_PREFIX . 'font-' ) === 0 ) {
+					unset( $view_settings[ $key ] );
+				}
+			}
+
 			set_transient( PT_CV_PREFIX . 'view-settings-' . $cv_unique_id, $view_settings, 30 * MINUTE_IN_SECONDS );
 		}
 	} else if ( $action === 'get' ) {
@@ -246,4 +303,82 @@ function cv_comp_common_slider_number_in_excerpt( $args ) {
 	$args	 = preg_replace( '/<a[^>]*>(\d+)<\/a>/', '', $args );
 	$args	 = preg_replace( '/<li[^>]*>(\d+)<\/li>/', '', $args );
 	return $args;
+}
+
+/** Fix error "View * may not exist" caused by the "Shortcodes Anywhere or Everywhere" plugin
+ * @since 2.0
+ */
+add_action( 'pt_cv_get_view_settings', 'cv_comp_plugin_saoe' );
+function cv_comp_plugin_saoe() {
+	remove_filter( 'get_post_metadata', 'jr_saoe_get_post_metadata', 10 );
+}
+
+/** Redirect old /?vpage=
+ * @since 2.0
+ */
+add_action( 'init', 'cv_comp_common_redirect_vpage', 1 );
+function cv_comp_common_redirect_vpage() {
+	// The pagination variable name
+	if ( is_front_page() && !is_home() ) {
+		$pvar = 'paged';
+	} else if ( is_singular() ) {
+		$pvar = 'page';
+	} else {
+		$pvar = '_page';
+	}
+	$GLOBALS[ 'cv_page_var' ] = apply_filters( PT_CV_PREFIX_ . 'page_var', $pvar );
+
+	if ( !empty( $_GET[ 'vpage' ] ) && !headers_sent() ) {
+		$pagenum = absint( $_GET[ 'vpage' ] );
+		if ( $pagenum >= 1 ) {
+			$new_url = cv_comp_get_pagenum_link( $pagenum );
+			wp_safe_redirect( $new_url, 301 );
+			exit;
+		}
+	}
+}
+
+/** Compatible with Timeline layout which uses 'vpage'
+ * @since 2.0
+ */
+add_action( PT_CV_PREFIX_ . 'view_process_start', 'cv_comp_pro_timeline' );
+function cv_comp_pro_timeline() {
+	$pagenum = cv_comp_get_page_number();
+	if ( !empty( $pagenum ) ) {
+		$_GET[ 'vpage' ] = 'notempty'; /* not empty value is enough for compatibility */
+	}
+}
+
+/** Generate page numeric link for Normal pagination
+ *
+ * @param int $pagenum
+ * @return string
+ */
+function cv_comp_get_pagenum_link( $pagenum ) {
+	$pvar = $GLOBALS[ 'cv_page_var' ];
+	if ( '' != get_option( 'permalink_structure' ) && in_array( $pvar, array( 'page', 'paged' ) ) && !is_preview() ) {
+		global $wp_rewrite;
+		$link	 = get_permalink();
+		$extra	 = ($pvar === 'paged') ? trailingslashit( $wp_rewrite->pagination_base ) : '';
+		$link	 = user_trailingslashit( trailingslashit( $link ) . $extra . $pagenum );
+	} else {
+		$link = add_query_arg( $pvar, $pagenum );
+	}
+
+	return remove_query_arg( 'vpage', $link );
+}
+
+/** Get the page number for Normal pagination
+ *
+ * @return type
+ */
+function cv_comp_get_page_number() {
+	$paged = @absint( $_GET[ '_page' ] );
+	if ( !$paged ) {
+		$paged = get_query_var( 'paged' );
+	}
+	if ( !$paged ) {
+		$paged = get_query_var( 'page' );
+	}
+	return $paged;
 }
